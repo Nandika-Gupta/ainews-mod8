@@ -26,15 +26,67 @@ export interface ExtractedArticleMetadata {
 }
 
 const BODY_EXCERPT_MAX_LENGTH = 600;
+const MIN_PARAGRAPH_CHARS = 40;
 
-/** Plain-text excerpt of the page's main content, stripped of chrome (nav/header/footer/scripts). */
+/** Common real-article-body containers, most-specific first — narrows the search before falling back to the whole <article>/<main>/<body>. */
+const CONTENT_SELECTORS = [
+  '[itemprop="articleBody"]',
+  ".article-body",
+  ".article-content",
+  ".entry-content",
+  ".post-content",
+  ".story-body",
+  ".story-content",
+  '[data-component="ArticleBody"]',
+  "article",
+  "main",
+  "body",
+];
+
+/**
+ * Plain-text excerpt of the page's main content. Two defenses against
+ * pulling nav/menu/video-player chrome instead of the real article
+ * (confirmed live: a CNBC article's "summary" ended up as raw concatenated
+ * nav-menu text, "Skip NavigationMarketsBusinessInvestingTechPoliticsClub..."):
+ *
+ * 1. Removes obvious chrome elements before extracting anything.
+ * 2. Extracts text from <p>/<li>/heading/<blockquote> elements specifically,
+ *    joined with spaces, rather than every text node inside the container
+ *    via .text() — real article prose is almost universally structured as
+ *    paragraphs, while nav links/buttons/video-player labels typically
+ *    aren't inside a <p> at all. This also fixes a second, related bug:
+ *    cheerio's .text() concatenates sibling elements' text with NO
+ *    separator, so "Markets" next to "Business" next to "Tech" becomes the
+ *    single unbroken word "MarketsBusinessTech" — which, having no spaces,
+ *    can't word-wrap in the UI either. Joining per-element text with spaces
+ *    avoids that entirely.
+ */
 function extractBodyExcerpt(html: string): string | null {
   const $ = cheerio.load(html);
-  $("script, style, nav, header, footer, noscript, svg, form, iframe").remove();
-  const container = $("article").first().length ? $("article").first() : $("main").first().length ? $("main").first() : $("body");
-  const text = cleanText(container.text());
-  if (!text) return null;
-  return text.length > BODY_EXCERPT_MAX_LENGTH ? `${text.slice(0, BODY_EXCERPT_MAX_LENGTH)}…` : text;
+  $(
+    "script, style, nav, header, footer, aside, noscript, svg, form, iframe, button, " +
+      '.nav, .navigation, .menu, .breadcrumb, [role="navigation"], ' +
+      ".social-share, .share-buttons, .related-articles, .newsletter-signup, " +
+      ".video-player, .ad, .advertisement, .comments"
+  ).remove();
+
+  for (const selector of CONTENT_SELECTORS) {
+    const container = $(selector).first();
+    if (!container.length) continue;
+
+    const paragraphs = container
+      .find("p, li, h2, h3, h4, blockquote")
+      .map((_, el) => cleanText($(el).text()))
+      .get()
+      .filter((t) => t.length >= MIN_PARAGRAPH_CHARS);
+
+    if (paragraphs.length === 0) continue;
+
+    const text = paragraphs.join(" ");
+    return text.length > BODY_EXCERPT_MAX_LENGTH ? `${text.slice(0, BODY_EXCERPT_MAX_LENGTH)}…` : text;
+  }
+
+  return null;
 }
 
 function firstOf<T>(value: T | T[] | undefined): T | undefined {

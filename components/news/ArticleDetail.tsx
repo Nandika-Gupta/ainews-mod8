@@ -114,6 +114,13 @@ export function ArticleDetail({ article: a, related, sources, popularSources }: 
                 letterSpacing: "-0.011em",
                 color: "color-mix(in srgb, var(--text-primary) 85%, var(--text-secondary))",
                 margin: 0,
+                // Belt-and-suspenders: normal prose wraps at spaces fine on
+                // its own, but a long unbroken run with no spaces at all
+                // (e.g. concatenated nav-menu text from a bad extraction)
+                // won't wrap without this, forcing the whole page wider than
+                // the viewport instead of staying inside its container.
+                overflowWrap: "break-word",
+                wordBreak: "break-word",
               }}
             >
               {a.aiSummary}

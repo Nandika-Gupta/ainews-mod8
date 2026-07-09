@@ -1,24 +1,30 @@
 /**
  * One-shot backfill: regenerates aiSummary (and dek, where needed) for
- * existing articles currently stuck showing the title as their summary —
- * the symptom of the bug fixed in pipeline.ts's fallback chain (hnDiscovery.ts
- * and feedParser.ts used to silently substitute the title when no real
- * description was available, so `aiSummary === title` for a large share of
- * the site, especially every Hacker-News-discovered article).
+ * existing articles currently stuck on either (a) the title as their
+ * summary — the symptom of the bug fixed in pipeline.ts's fallback chain
+ * (hnDiscovery.ts and feedParser.ts used to silently substitute the title
+ * when no real description was available), or (b) NO_SUMMARY_PLACEHOLDER —
+ * which only happens when both enrichment and the LLM waterfall came up
+ * empty, usually a transient site/network failure at that specific moment
+ * rather than a permanent one (confirmed live: re-fetching the same URL
+ * minutes later found real content that wasn't there during ingestion) —
+ * so it's worth periodically retrying these rows, not just title-duplicates.
  *
- * For each broken row: reuse the existing dek if it's real (not itself a
- * title-duplicate), otherwise re-fetch the article page for its real
- * OG/JSON-LD description or a body-text excerpt — the same real-content
- * fallback chain ingestion now uses — then run it through the LLM
- * summarization waterfall. Never falls back to the title.
+ * For each broken row: reuse the existing dek if it's real (not itself
+ * broken), otherwise re-fetch the article page for its real OG/JSON-LD
+ * description or a body-text excerpt — the same real-content fallback chain
+ * ingestion now uses — then run it through the LLM summarization waterfall.
+ * Policy is real summary or nothing: if the retry still finds no real
+ * content, the row is deleted rather than left showing a placeholder that
+ * looks broken (pipeline.ts applies the same policy going forward — it
+ * never creates a row like this in the first place).
  *
  * Usage: npx tsx ingestion/backfillSummaries.ts
  */
 import { prisma } from "../lib/prisma";
 import { generateAiSummary } from "./llmSummarizer";
 import { extractArticleMetadata } from "./metadataExtractor";
-
-const NO_SUMMARY_PLACEHOLDER = "No summary available for this article.";
+import { NO_SUMMARY_PLACEHOLDER } from "./pipeline";
 
 async function fetchRealContent(articleUrl: string): Promise<{ description: string | null; bodyExcerpt: string | null }> {
   try {
@@ -37,14 +43,16 @@ async function main() {
     select: { id: true, title: true, dek: true, aiSummary: true, articleUrl: true },
   });
 
-  const broken = rows.filter((r) => r.aiSummary.trim() === r.title.trim() || r.dek.trim() === r.title.trim());
-  console.log(`Found ${broken.length} article(s) with a title-duplicate summary out of ${rows.length} total.\n`);
+const isBroken = (text: string, title: string) => text.trim() === title.trim() || text.trim() === NO_SUMMARY_PLACEHOLDER;
+
+  const broken = rows.filter((r) => isBroken(r.aiSummary, r.title) || isBroken(r.dek, r.title));
+  console.log(`Found ${broken.length} article(s) with a title-duplicate or empty-fallback summary out of ${rows.length} total.\n`);
 
   let fixed = 0;
-  let noRealContent = 0;
+  let removed = 0;
 
   for (const row of broken) {
-    let dek = row.dek.trim() === row.title.trim() ? "" : row.dek;
+    let dek = isBroken(row.dek, row.title) ? "" : row.dek;
     let realContent = dek;
 
     if (!realContent) {
@@ -55,24 +63,29 @@ async function main() {
 
     const hasRealContent = realContent.trim().length > 0 && realContent.trim() !== row.title.trim();
     const llmSummary = hasRealContent ? await generateAiSummary(row.title, realContent) : null;
-    const newDek = dek || NO_SUMMARY_PLACEHOLDER;
-    const newAiSummary = llmSummary || newDek;
-
-    await prisma.newsArticle.update({
-      where: { id: row.id },
-      data: { dek: newDek, aiSummary: newAiSummary },
-    });
 
     if (llmSummary) {
+      await prisma.newsArticle.update({
+        where: { id: row.id },
+        data: { dek: dek || llmSummary, aiSummary: llmSummary },
+      });
       fixed++;
       console.log(`  ✅ ${row.title.slice(0, 70)}`);
     } else {
-      noRealContent++;
-      console.log(`  ⚠️  ${row.title.slice(0, 70)} -> no real content found anywhere, set to honest fallback`);
+      // Real summary or nothing — same policy pipeline.ts now applies at
+      // ingestion time. Still no real content after a fresh retry, so
+      // remove the article rather than leave a placeholder-looking row.
+      await prisma.$transaction([
+        prisma.bookmark.deleteMany({ where: { articleId: row.id } }),
+        prisma.vote.deleteMany({ where: { articleId: row.id } }),
+        prisma.newsArticle.delete({ where: { id: row.id } }),
+      ]);
+      removed++;
+      console.log(`  🗑️  ${row.title.slice(0, 70)} -> no real content found anywhere, removed`);
     }
   }
 
-  console.log(`\nDone. ${fixed} article(s) got a real LLM summary, ${noRealContent} had no real content available (article page unreachable / no description).`);
+  console.log(`\nDone. ${fixed} article(s) got a real LLM summary, ${removed} had no real content available and were removed.`);
 }
 
 main()

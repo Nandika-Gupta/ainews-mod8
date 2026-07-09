@@ -29,6 +29,16 @@ import type { FeedSource } from "./sources";
  */
 const THIN_SUMMARY_WORD_THRESHOLD = 40;
 
+/**
+ * Shared with backfillSummaries.ts, which treats any row stuck on this exact
+ * string as a candidate to retry — this only happens when both the LLM
+ * waterfall AND enrichment came up empty for an entry, which is usually a
+ * transient site/network failure at that specific moment (confirmed live:
+ * re-fetching the same URL minutes later found real content that wasn't
+ * there during ingestion) rather than a permanent one.
+ */
+export const NO_SUMMARY_PLACEHOLDER = "No summary available for this article.";
+
 /** True for an empty description, or one too short to support a genuine multi-sentence LLM summary. */
 function isThinSummary(summary: string): boolean {
   const words = summary.trim().split(/\s+/).filter(Boolean);
@@ -59,6 +69,8 @@ export interface PipelineResult {
   skippedNearDuplicate: number;
   skippedNotAiRelevant: number;
   skippedInvalid: number;
+  /** Entry reached summarization but no real content was ever found (no RSS description, no scrapeable body, LLM waterfall exhausted) — never created rather than stored with a placeholder summary. See NO_SUMMARY_PLACEHOLDER. */
+  skippedNoContent: number;
   errors: string[];
 }
 
@@ -243,7 +255,7 @@ async function summarizePrepared(p: PreparedEntry): Promise<string> {
   const realContent = (p.bodyExcerpt || p.summary || "").trim();
   const hasRealContent = realContent.length > 0 && realContent !== p.title.trim();
   const llmSummary = hasRealContent ? await generateAiSummary(p.title, realContent) : null;
-  return llmSummary || p.summary || p.bodyExcerpt || "No summary available for this article.";
+  return llmSummary || p.summary || p.bodyExcerpt || NO_SUMMARY_PLACEHOLDER;
 }
 
 /** Sequential DB write, in original entry order — the only phase that touches Publisher/slug/create, so no race risk even though phase 2 (summarization) ran concurrently. */
@@ -251,7 +263,7 @@ async function finalizePrepared(p: PreparedEntry, aiSummary: string, source: Fee
   const publisher = await resolvePublisher(p.domain, p.nameHint);
   const slug = await uniqueSlug(p.title);
   const topics = deriveTopics(p.entry.title, p.summary);
-  const dek = p.summary || p.bodyExcerpt || "No summary available for this article.";
+  const dek = p.summary || p.bodyExcerpt || NO_SUMMARY_PLACEHOLDER;
 
   await prisma.newsArticle.create({
     data: {
@@ -280,6 +292,7 @@ function newPipelineResult(source: string): PipelineResult {
     skippedNearDuplicate: 0,
     skippedNotAiRelevant: 0,
     skippedInvalid: 0,
+    skippedNoContent: 0,
     errors: [],
   };
 }
@@ -330,11 +343,18 @@ async function ingestEntries(entries: FeedEntry[], source: FeedSource, titleInde
       return await summarizePrepared(p);
     } catch (err) {
       result.errors.push(`"${p.title}" (summarization): ${(err as Error).message}`);
-      return p.summary || p.bodyExcerpt || "No summary available for this article.";
+      return p.summary || p.bodyExcerpt || NO_SUMMARY_PLACEHOLDER;
     }
   });
 
   for (let i = 0; i < prepared.length; i++) {
+    // No real content anywhere (no description, no scrapeable body, LLM
+    // waterfall exhausted) — don't create a row that would just show a
+    // placeholder instead of a real summary. Real content or nothing.
+    if (summaries[i] === NO_SUMMARY_PLACEHOLDER) {
+      result.skippedNoContent++;
+      continue;
+    }
     try {
       await finalizePrepared(prepared[i], summaries[i], source);
       result.created++;

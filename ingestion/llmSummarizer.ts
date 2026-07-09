@@ -37,6 +37,50 @@ function debug(msg: string): void {
   if (DEBUG) console.log(`  [llm-debug] ${msg}`);
 }
 
+/**
+ * A GLOBAL concurrency gate across every call into this module, not just a
+ * per-source one. pipeline.ts bounds LLM calls to 4-at-a-time *within* a
+ * single source, but up to 4 sources also run concurrently — meaning up to
+ * 4×4=16 LLM requests could fire at once with no cross-source coordination,
+ * easily blowing through Gemini's free-tier rate limit all at once and
+ * triggering a synchronized cascade of 429s/backoffs across sources rather
+ * than a clean, staggered fallback (observed live: a burst of articles
+ * created in the first ~2 minutes of a run, then a multi-minute stall).
+ * Since every LLM call in the whole ingest process funnels through
+ * generateJson() in this one module/process, a module-level semaphore here
+ * is the simplest correct place to cap the TRUE global concurrency.
+ */
+class Semaphore {
+  private available: number;
+  private readonly queue: (() => void)[] = [];
+
+  constructor(count: number) {
+    this.available = count;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.available > 0) {
+      this.available--;
+      return;
+    }
+    return new Promise((resolve) => {
+      this.queue.push(() => {
+        this.available--;
+        resolve();
+      });
+    });
+  }
+
+  release(): void {
+    this.available++;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const GLOBAL_LLM_CONCURRENCY = 4;
+const llmGate = new Semaphore(GLOBAL_LLM_CONCURRENCY);
+
 interface WaterfallResult {
   result: Record<string, unknown> | null;
   rateLimited: boolean;
@@ -164,7 +208,7 @@ async function tryPollinations(prompt: string): Promise<WaterfallResult> {
 }
 
 /** Waterfall: Gemini -> Groq -> Pollinations, retried a couple of times with a short backoff between full passes. */
-async function generateJson(prompt: string): Promise<Record<string, unknown> | null> {
+async function generateJsonGated(prompt: string): Promise<Record<string, unknown> | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
   debug(`starting waterfall — GEMINI_API_KEY ${geminiKey ? "present" : "MISSING"}, GROQ_API_KEY ${groqKey ? "present" : "MISSING"}`);
@@ -193,6 +237,22 @@ async function generateJson(prompt: string): Promise<Record<string, unknown> | n
 
   debug(`all tiers failed after ${WATERFALL_RETRIES} attempt(s)`);
   return null;
+}
+
+/**
+ * Acquires a global concurrency slot (see llmGate above) before starting the
+ * waterfall, and holds it for the whole attempt — including any rate-limit
+ * backoff sleep — so at most GLOBAL_LLM_CONCURRENCY articles are ever
+ * mid-summarization at once across the entire ingest run, regardless of how
+ * many sources are running concurrently.
+ */
+async function generateJson(prompt: string): Promise<Record<string, unknown> | null> {
+  await llmGate.acquire();
+  try {
+    return await generateJsonGated(prompt);
+  } finally {
+    llmGate.release();
+  }
 }
 
 function buildSummaryPrompt(title: string, description: string): string {

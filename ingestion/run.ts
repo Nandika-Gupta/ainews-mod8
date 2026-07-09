@@ -48,7 +48,8 @@ async function main() {
     totalCreated += r.created;
     console.log(
       `${r.source.padEnd(24)} fetched=${r.fetched} created=${r.created} duplicate=${r.skippedDuplicate} ` +
-        `near-dup=${r.skippedNearDuplicate} not-ai=${r.skippedNotAiRelevant} invalid=${r.skippedInvalid}` +
+        `near-dup=${r.skippedNearDuplicate} not-ai=${r.skippedNotAiRelevant} invalid=${r.skippedInvalid} ` +
+        `no-content=${r.skippedNoContent}` +
         `${r.errors.length ? ` errors=${r.errors.length}` : ""}`
     );
     for (const err of r.errors.slice(0, 3)) console.log(`   ! ${err}`);
