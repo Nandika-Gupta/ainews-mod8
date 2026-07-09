@@ -16,6 +16,7 @@ import { resolvePublisher } from "./publisherRegistry";
 import { deriveTopics, isAiRelevant } from "./topicTagging";
 import { extractArticleMetadata } from "./metadataExtractor";
 import { discoverFromHackerNews } from "./hnDiscovery";
+import { generateAiSummary } from "./llmSummarizer";
 import type { FeedSource } from "./sources";
 
 /**
@@ -139,15 +140,18 @@ async function ingestEntry(
   const slug = await uniqueSlug(title);
   const topics = deriveTopics(entry.title, summary);
 
+  // Real LLM summary via the free-tier waterfall (see llmSummarizer.ts) —
+  // never blocks or fails ingestion: generateAiSummary() returns null on any
+  // failure (missing keys, all three tiers down, bad response), and the raw
+  // RSS/OpenGraph description is used as-is when that happens.
+  const aiSummary = (await generateAiSummary(title, summary)) ?? summary;
+
   await prisma.newsArticle.create({
     data: {
       slug,
       title,
       dek: summary,
-      // No LLM in this pipeline (see architecture note in README) — the feed's
-      // own summary/description stands in for "AI Summary" until a real
-      // summarization step is added.
-      aiSummary: summary,
+      aiSummary,
       articleUrl,
       publisherId: publisher.id,
       category: source.category,

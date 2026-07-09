@@ -14,7 +14,24 @@ import { pruneToMostRecent } from "./prune";
 
 const MAX_LIVE_ARTICLES = 200;
 
+/**
+ * Fails fast with a clear message instead of letting a missing secret surface
+ * as an opaque Prisma connection error 20+ seconds into the run — exactly
+ * what happened on the last two scheduled GitHub Actions runs (both failed
+ * in ~23s, consistent with DATABASE_URL never being set as a repo secret).
+ */
+function checkRequiredEnv(): void {
+  if (!process.env.DATABASE_URL) {
+    console.error("FATAL: DATABASE_URL is not set. If this is running in GitHub Actions, add it under Settings -> Secrets and variables -> Actions.");
+    process.exit(1);
+  }
+  for (const key of ["GEMINI_API_KEY", "GROQ_API_KEY"]) {
+    if (!process.env[key]) console.warn(`  note: ${key} is not set — LLM summaries will fall through to Pollinations.ai or the raw RSS description.`);
+  }
+}
+
 async function main() {
+  checkRequiredEnv();
   console.log(`Ingesting ${FEED_SOURCES.length} feed source(s)...\n`);
 
   // Shared across both RSS and HN-discovery ingestion so a story picked up

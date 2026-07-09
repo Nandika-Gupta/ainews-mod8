@@ -75,6 +75,16 @@ export function PublisherIcon({ source, box = 44 }: PublisherIconProps) {
   // browser tab) instead of a per-publisher color-tinted halo + border ring,
   // which read as an extra decorative "badge" competing with the logo's own
   // colors rather than a clean container for it.
+  //
+  // The chip background is a fixed near-white, not a dark app-surface color:
+  // most real favicons/brand marks are solid black (or another dark, low-
+  // saturation color) on a transparent background — designed for a light
+  // browser-tab chrome — and are effectively invisible against our dark UI
+  // otherwise (confirmed on Rust Foundation's and AI Now Institute's real
+  // logos, both solid black line art on transparent backgrounds). A light
+  // chip guarantees contrast for any logo regardless of its own color, which
+  // is what makes GraphOne's icon list read as clean/polished — every icon
+  // sits on the same light, predictable surface.
   const imgSize = Math.round(box * 0.72);
   const c = source.color;
   const src = candidates[index];
@@ -90,9 +100,9 @@ export function PublisherIcon({ source, box = 44 }: PublisherIconProps) {
         height: box,
         flex: "none",
         borderRadius: radius,
-        background: "var(--bg-surface-2)",
-        border: "1px solid var(--border-default)",
-        boxShadow: box >= 40 ? "var(--highlight-top)" : "none",
+        background: "#F3F3F5",
+        border: "1px solid rgba(0, 0, 0, 0.06)",
+        boxShadow: box >= 40 ? "0 1px 2px rgba(0, 0, 0, 0.25)" : "none",
         overflow: "hidden",
       }}
     >
