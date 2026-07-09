@@ -14,8 +14,12 @@ interface NewsPageProps {
 
 export default async function NewsPage({ searchParams }: NewsPageProps) {
   const { category, topic } = await searchParams;
-  const [articles, sources, categories] = await Promise.all([getArticles(), getSourcesMap(), getCategories()]);
-  const filterChips = getFilterChips();
+  const [articles, sources, categories, filterChips] = await Promise.all([
+    getArticles(),
+    getSourcesMap(),
+    getCategories(),
+    getFilterChips(),
+  ]);
 
   return (
     <PageShell>

@@ -56,8 +56,12 @@ export function NewsListingClient({ articles, sources, categories, filterChips, 
 
   let list = articles.slice();
   if (category) list = list.filter((a) => a.category === category || a.filters.includes(category));
-  if (filter === "trending") list = list.filter((a) => a.score >= 80);
-  else if (filter !== "all") list = list.filter((a) => a.filters.includes(filter) || a.category === filter);
+  // "Trending" = real articles from the last 48h — not the old fixed 80-percentile
+  // rank-score cut, which was an artifact of array order and meaningless once
+  // every real article starts at 0 votes. Other chips are dynamic topic names
+  // (see getFilterChips()), so they filter on the real `topics` field.
+  if (filter === "trending") list = list.filter((a) => a.hours <= 48);
+  else if (filter !== "all") list = list.filter((a) => a.topics.includes(filter));
   list = applySearch(list, query, sources);
   if (selectedTopics.length) list = list.filter((a) => selectedTopics.some((t) => a.topics.includes(t)));
   if (selectedSources.length) list = list.filter((a) => selectedSources.includes(a.source));

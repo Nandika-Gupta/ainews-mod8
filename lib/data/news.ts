@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { prisma } from "@/lib/prisma";
+import { COMPANY_TOPIC_LABELS, GENERIC_TOPIC_FALLBACK } from "@/ingestion/topicTagging";
 import type { NewsArticle, NewsCategory, NewsFilterChip, NewsSource } from "@/types/news";
 import type { NewsArticle as PrismaArticle, Publisher, Topic } from "@prisma/client";
 
@@ -132,17 +133,41 @@ function labelizeCategory(key: string): string {
   return known[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
 
-/** Fixed UI vocabulary for the filter-chip row — a business rule, not article content, so it stays a constant. */
-export function getFilterChips(): NewsFilterChip[] {
-  return [
-    { id: "all", label: "All News" },
-    { id: "trending", label: "Trending" },
-    { id: "research", label: "Research" },
-    { id: "breakthroughs", label: "Breakthroughs" },
-    { id: "startups", label: "Startups" },
-    { id: "opensource", label: "Open Source" },
-    { id: "funding", label: "Funding" },
-  ];
+const DYNAMIC_CHIP_WINDOW_MS = 48 * 60 * 60 * 1000;
+const MAX_DYNAMIC_CHIPS = 5;
+
+/**
+ * "All News" and "Trending" are fixed, stable positions — see the `trending`
+ * chip's filter (`article.hours <= 48`) in NewsListingClient.tsx. Everything
+ * after that is derived from real topic volume in the last 48h, rather than
+ * a hardcoded list — the fixed set this replaced (Research/Breakthroughs/
+ * Startups/Open Source/Funding) filtered on `filterTags`, which real
+ * ingestion never populates, and `category`, which is "research" for every
+ * real article — so those chips were either dead or matched everything.
+ *
+ * Excludes the generic "AI" catch-all (not a real topic) and single-company
+ * topics like "OpenAI"/"Anthropic" (naming one company in a filter chip on a
+ * general AI aggregator reads as favoritism, and isn't a topic a user would
+ * predictably reach for) — see COMPANY_TOPIC_LABELS in topicTagging.ts.
+ */
+export async function getFilterChips(): Promise<NewsFilterChip[]> {
+  const since = new Date(Date.now() - DYNAMIC_CHIP_WINDOW_MS);
+  const rows = await prisma.$queryRaw<{ name: string; count: bigint }[]>`
+    SELECT t.name, count(*) as count
+    FROM "Topic" t
+    JOIN "_NewsArticleToTopic" nt ON t.id = nt."B"
+    JOIN "NewsArticle" a ON a.id = nt."A"
+    WHERE a."publishedAt" >= ${since}
+    GROUP BY t.name
+    ORDER BY count(*) DESC
+  `;
+
+  const dynamicChips: NewsFilterChip[] = rows
+    .filter((r) => r.name !== GENERIC_TOPIC_FALLBACK && !COMPANY_TOPIC_LABELS.has(r.name))
+    .slice(0, MAX_DYNAMIC_CHIPS)
+    .map((r) => ({ id: r.name, label: r.name }));
+
+  return [{ id: "all", label: "All News" }, { id: "trending", label: "Trending" }, ...dynamicChips];
 }
 
 /** Top 5 publishers by article count — a real popularity signal instead of a hardcoded list. */

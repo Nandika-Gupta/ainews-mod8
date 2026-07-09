@@ -6,27 +6,39 @@
  * word-boundary regex — appropriate for a feed pipeline that shouldn't need
  * an LLM to know an article mentions "OpenAI".
  */
-const KNOWN_TOPICS: { label: string; pattern: RegExp }[] = [
-  { label: "OpenAI", pattern: /\bopenai\b/i },
-  { label: "Anthropic", pattern: /\banthropic|claude\b/i },
-  { label: "Google DeepMind", pattern: /\bgoogle deepmind|deepmind|gemini\b/i },
-  { label: "Meta AI", pattern: /\bmeta ai|llama\b/i },
-  { label: "Microsoft", pattern: /\bmicrosoft|copilot\b/i },
-  { label: "NVIDIA", pattern: /\bnvidia\b/i },
-  { label: "Mistral AI", pattern: /\bmistral\b/i },
-  { label: "Hugging Face", pattern: /\bhugging face\b/i },
-  { label: "Perplexity", pattern: /\bperplexity\b/i },
-  { label: "AI Regulation", pattern: /\bregulation|ai act|policy\b/i },
-  { label: "Funding", pattern: /\bfunding|raises|valuation|series [a-e]\b/i },
-  { label: "Robotics", pattern: /\brobot|robotics|humanoid\b/i },
-  { label: "Open Source", pattern: /\bopen[- ]source|open[- ]weight\b/i },
-  { label: "Model Release", pattern: /\bmodel|release|launch/i },
+const KNOWN_TOPICS: { label: string; pattern: RegExp; kind: "company" | "theme" }[] = [
+  { label: "OpenAI", pattern: /\bopenai\b/i, kind: "company" },
+  { label: "Anthropic", pattern: /\banthropic|claude\b/i, kind: "company" },
+  { label: "Google DeepMind", pattern: /\bgoogle deepmind|deepmind|gemini\b/i, kind: "company" },
+  { label: "Meta AI", pattern: /\bmeta ai|llama\b/i, kind: "company" },
+  { label: "Microsoft", pattern: /\bmicrosoft|copilot\b/i, kind: "company" },
+  { label: "NVIDIA", pattern: /\bnvidia\b/i, kind: "company" },
+  { label: "Mistral AI", pattern: /\bmistral\b/i, kind: "company" },
+  { label: "Hugging Face", pattern: /\bhugging face\b/i, kind: "company" },
+  { label: "Perplexity", pattern: /\bperplexity\b/i, kind: "company" },
+  { label: "AI Regulation", pattern: /\bregulation|ai act|policy\b/i, kind: "theme" },
+  { label: "Funding", pattern: /\bfunding|raises|valuation|series [a-e]\b/i, kind: "theme" },
+  { label: "Robotics", pattern: /\brobot|robotics|humanoid\b/i, kind: "theme" },
+  { label: "Open Source", pattern: /\bopen[- ]source|open[- ]weight\b/i, kind: "theme" },
+  { label: "Model Release", pattern: /\bmodel|release|launch/i, kind: "theme" },
 ];
+
+/** Generic fallback when no keyword matches — never a real topical category, always excluded from anything presented as a filter/chip. */
+export const GENERIC_TOPIC_FALLBACK = "AI";
+
+/**
+ * Topic labels that name a single company (OpenAI, Anthropic, ...) rather than
+ * a genuine theme (Funding, Robotics, ...). Naming one company in a filter
+ * chip on a general AI news aggregator reads as favoritism, so anything that
+ * builds a chip/filter list from real topic data should exclude these —
+ * see getFilterChips() in lib/data/news.ts.
+ */
+export const COMPANY_TOPIC_LABELS = new Set(KNOWN_TOPICS.filter((t) => t.kind === "company").map((t) => t.label));
 
 export function deriveTopics(title: string, summary: string): string[] {
   const text = `${title} ${summary}`;
   const matched = KNOWN_TOPICS.filter((t) => t.pattern.test(text)).map((t) => t.label);
-  return matched.length > 0 ? matched.slice(0, 4) : ["AI"];
+  return matched.length > 0 ? matched.slice(0, 4) : [GENERIC_TOPIC_FALLBACK];
 }
 
 const AI_RELEVANCE_RE =
