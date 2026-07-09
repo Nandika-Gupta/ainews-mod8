@@ -21,7 +21,16 @@
 const GEMINI_MODEL = "gemini-flash-lite-latest";
 const GROQ_MODEL = "llama-3.1-8b-instant";
 const REQUEST_TIMEOUT_MS = 20_000;
-const WATERFALL_RETRIES = 2;
+// A single pass through all 3 tiers, not a repeated full waterfall. The
+// last tier (Pollinations) has no API key and no rate limit, so a second
+// full pass 1.5s later rarely changes the outcome for a genuine failure —
+// it mostly just doubles worst-case latency (up to another ~60s per
+// article across 3 tiers' timeouts) for articles that were going to fail
+// either way. Any article that still ends up with a weak/fallback summary
+// gets caught by the backfillSummaries.ts safety net, so lowering this is a
+// safe trade of a small amount of coverage for a real speed win at real
+// ingestion volume.
+const WATERFALL_RETRIES = 1;
 
 const DEBUG = !!process.env.LLM_SUMMARIZER_DEBUG;
 function debug(msg: string): void {

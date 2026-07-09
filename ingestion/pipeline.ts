@@ -110,27 +110,45 @@ async function uniqueSlug(base: string): Promise<string> {
  */
 const BLOCKED_DOMAINS = new Set(["youtube.com"]);
 
-async function ingestEntry(
-  entry: FeedEntry,
-  source: FeedSource,
-  titleIndex: RecentTitleIndex
-): Promise<"created" | "duplicate" | "near-duplicate" | "not-relevant" | "invalid"> {
+interface PreparedEntry {
+  entry: FeedEntry;
+  articleUrl: string;
+  domain: string;
+  title: string;
+  summary: string;
+  bodyExcerpt: string | null;
+  publishedAt: Date;
+  nameHint: string | null;
+}
+
+type PrepareOutcome = { kind: "prepared"; data: PreparedEntry } | { kind: "duplicate" | "near-duplicate" | "not-relevant" | "invalid" };
+
+/**
+ * Fast, sequential-safe checks + real-content gathering — validation,
+ * exact-URL/near-duplicate-title dedup, and enrichment, but no LLM call and
+ * no DB write. Must stay sequential (entry N's checks complete before entry
+ * N+1's) so two entries can't race on the near-duplicate-title index; the
+ * slow LLM step is deliberately NOT here — see summarizePrepared() below,
+ * which is safe to run concurrently since it touches no shared/DB state.
+ */
+async function prepareEntry(entry: FeedEntry, source: FeedSource, titleIndex: RecentTitleIndex, seenInBatch: Set<string>): Promise<PrepareOutcome> {
   const articleUrl = normalizeUrl(entry.link);
-  if (!articleUrl) return "invalid";
+  if (!articleUrl) return { kind: "invalid" };
+  if (seenInBatch.has(articleUrl)) return { kind: "duplicate" };
 
   const domain = domainFromUrl(articleUrl);
-  if (!domain) return "invalid";
-  if (BLOCKED_DOMAINS.has(domain)) return "invalid";
+  if (!domain) return { kind: "invalid" };
+  if (BLOCKED_DOMAINS.has(domain)) return { kind: "invalid" };
 
   if (!source.aiOnly && !isAiRelevant(entry.title, entry.summary)) {
-    return "not-relevant";
+    return { kind: "not-relevant" };
   }
 
   const existing = await prisma.newsArticle.findUnique({ where: { articleUrl } });
-  if (existing) return "duplicate";
+  if (existing) return { kind: "duplicate" };
 
   const title = cleanText(entry.title);
-  if (isNearDuplicateTitle(titleIndex, title)) return "near-duplicate";
+  if (isNearDuplicateTitle(titleIndex, title)) return { kind: "near-duplicate" };
 
   let publishedAt = robustParseDate(entry.publishedRaw);
   let summary = entry.summary;
@@ -148,41 +166,56 @@ async function ingestEntry(
   // feed sources link back to their own site, so `name` is a safe hint for
   // a newly-discovered domain.
   const nameHint = source.kind === "discovery" ? null : source.name;
-  const publisher = await resolvePublisher(domain, nameHint);
-  const slug = await uniqueSlug(title);
-  const topics = deriveTopics(entry.title, summary);
 
-  // Fallback chain: LLM summary -> raw RSS/OG description -> article body
-  // excerpt -> a plainly-labeled "no summary" string. The title is NEVER
-  // used as a stand-in summary — feeding a title-only "description" to the
-  // LLM invites it to hallucinate plausible-sounding but unverified details
-  // (confirmed live), so the LLM is only called when there's real source
-  // text that isn't just the headline again.
-  const realContent = (summary || bodyExcerpt || "").trim();
-  const hasRealContent = realContent.length > 0 && realContent !== title.trim();
-  const llmSummary = hasRealContent ? await generateAiSummary(title, realContent) : null;
-  const dek = summary || bodyExcerpt || "No summary available for this article.";
-  const aiSummary = llmSummary || dek;
+  seenInBatch.add(articleUrl);
+  recordTitle(titleIndex, title);
+
+  return {
+    kind: "prepared",
+    data: { entry, articleUrl, domain, title, summary, bodyExcerpt, publishedAt: publishedAt ?? new Date(), nameHint },
+  };
+}
+
+/**
+ * The slow part — a real LLM call — run concurrently across many prepared
+ * entries (see SUMMARY_CONCURRENCY below). Fallback chain: LLM summary ->
+ * raw RSS/OG description -> article body excerpt -> a plainly-labeled "no
+ * summary" string. The title is NEVER used as a stand-in summary — feeding a
+ * title-only "description" to the LLM invites it to hallucinate
+ * plausible-sounding but unverified details (confirmed live), so the LLM is
+ * only called when there's real source text that isn't just the headline
+ * again.
+ */
+async function summarizePrepared(p: PreparedEntry): Promise<string> {
+  const realContent = (p.summary || p.bodyExcerpt || "").trim();
+  const hasRealContent = realContent.length > 0 && realContent !== p.title.trim();
+  const llmSummary = hasRealContent ? await generateAiSummary(p.title, realContent) : null;
+  return llmSummary || p.summary || p.bodyExcerpt || "No summary available for this article.";
+}
+
+/** Sequential DB write, in original entry order — the only phase that touches Publisher/slug/create, so no race risk even though phase 2 (summarization) ran concurrently. */
+async function finalizePrepared(p: PreparedEntry, aiSummary: string, source: FeedSource): Promise<void> {
+  const publisher = await resolvePublisher(p.domain, p.nameHint);
+  const slug = await uniqueSlug(p.title);
+  const topics = deriveTopics(p.entry.title, p.summary);
+  const dek = p.summary || p.bodyExcerpt || "No summary available for this article.";
 
   await prisma.newsArticle.create({
     data: {
       slug,
-      title,
+      title: p.title,
       dek,
       aiSummary,
-      articleUrl,
+      articleUrl: p.articleUrl,
       publisherId: publisher.id,
       category: source.category,
       filterTags: [],
-      publishedAt,
+      publishedAt: p.publishedAt,
       topics: {
         connectOrCreate: topics.map((name) => ({ where: { name }, create: { name } })),
       },
     },
   });
-
-  recordTitle(titleIndex, title);
-  return "created";
 }
 
 function newPipelineResult(source: string): PipelineResult {
@@ -198,21 +231,50 @@ function newPipelineResult(source: string): PipelineResult {
   };
 }
 
-/** Runs every entry through ingestEntry sequentially — entries within one source stay serial so the exact-URL/slug dedup checks can't race against each other. */
+const SUMMARY_CONCURRENCY = 4;
+
+/**
+ * Three phases per source: (1) sequential validation/dedup/enrichment — the
+ * only phase that must stay serial, so concurrent entries can't race on the
+ * near-duplicate-title index; (2) concurrent LLM summarization — the slow
+ * part (sequential retries/backoffs across 200+ articles were the direct
+ * cause of a 19+ minute GitHub Actions run), safe to parallelize since it
+ * touches no shared state; (3) sequential DB writes, original order.
+ */
 async function ingestEntries(entries: FeedEntry[], source: FeedSource, titleIndex: RecentTitleIndex): Promise<PipelineResult> {
   const result = newPipelineResult(source.name);
   result.fetched = entries.length;
+  const seenInBatch = new Set<string>();
 
+  const prepared: PreparedEntry[] = [];
   for (const entry of entries) {
     try {
-      const outcome = await ingestEntry(entry, source, titleIndex);
-      if (outcome === "created") result.created++;
-      else if (outcome === "duplicate") result.skippedDuplicate++;
-      else if (outcome === "near-duplicate") result.skippedNearDuplicate++;
-      else if (outcome === "not-relevant") result.skippedNotAiRelevant++;
+      const outcome = await prepareEntry(entry, source, titleIndex, seenInBatch);
+      if (outcome.kind === "prepared") prepared.push(outcome.data);
+      else if (outcome.kind === "duplicate") result.skippedDuplicate++;
+      else if (outcome.kind === "near-duplicate") result.skippedNearDuplicate++;
+      else if (outcome.kind === "not-relevant") result.skippedNotAiRelevant++;
       else result.skippedInvalid++;
     } catch (err) {
       result.errors.push(`"${entry.title}": ${(err as Error).message}`);
+    }
+  }
+
+  const summaries = await mapWithConcurrency(prepared, SUMMARY_CONCURRENCY, async (p) => {
+    try {
+      return await summarizePrepared(p);
+    } catch (err) {
+      result.errors.push(`"${p.title}" (summarization): ${(err as Error).message}`);
+      return p.summary || p.bodyExcerpt || "No summary available for this article.";
+    }
+  });
+
+  for (let i = 0; i < prepared.length; i++) {
+    try {
+      await finalizePrepared(prepared[i], summaries[i], source);
+      result.created++;
+    } catch (err) {
+      result.errors.push(`"${prepared[i].title}": ${(err as Error).message}`);
     }
   }
 

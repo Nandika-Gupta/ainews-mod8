@@ -12,7 +12,12 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Job-level safety net so a genuinely hung run fails and alerts within a
+    # bounded window instead of silently running for hours. Sized above the
+    # expected post-concurrency-fix duration (see the per-step timeout below
+    # and pipeline.ts's SUMMARY_CONCURRENCY) with headroom for the
+    # resolve-logos/commit steps that run after ingestion.
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -28,6 +33,7 @@ jobs:
       - run: npx prisma generate
 
       - name: Run ingestion
+        timeout-minutes: 15
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

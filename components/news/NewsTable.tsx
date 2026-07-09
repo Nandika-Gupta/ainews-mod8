@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { SortHeader } from "./SortHeader";
 import { FilterDropdown } from "./FilterDropdown";
@@ -45,6 +45,8 @@ interface NewsTableHeadProps {
 
 function NewsTableHead({ sort, onSort, filters, openFilter, setOpenFilter }: NewsTableHeadProps) {
   const cellBase = { display: "flex" as const, alignItems: "center" as const, height: "100%" };
+  const sourceCellRef = useRef<HTMLDivElement>(null);
+  const topicsCellRef = useRef<HTMLDivElement>(null);
 
   return (
     <div
@@ -65,7 +67,7 @@ function NewsTableHead({ sort, onSort, filters, openFilter, setOpenFilter }: New
       <div style={cellBase}>
         <SortHeader label="Title" sortKey="title" sort={sort} onSort={onSort} />
       </div>
-      <div style={{ ...cellBase, position: "relative" }}>
+      <div ref={sourceCellRef} style={{ ...cellBase, position: "relative" }}>
         <SortHeader
           label="Source"
           sortKey="source"
@@ -82,10 +84,11 @@ function NewsTableHead({ sort, onSort, filters, openFilter, setOpenFilter }: New
             onToggle={filters.onToggleSource}
             onClear={filters.onClearSources}
             onClose={() => setOpenFilter(null)}
+            anchorRef={sourceCellRef}
           />
         )}
       </div>
-      <div style={{ ...cellBase, position: "relative" }}>
+      <div ref={topicsCellRef} style={{ ...cellBase, position: "relative" }}>
         <SortHeader
           label="Topics"
           sortKey="topics"
@@ -102,6 +105,7 @@ function NewsTableHead({ sort, onSort, filters, openFilter, setOpenFilter }: New
             onToggle={filters.onToggleTopic}
             onClear={filters.onClearTopics}
             onClose={() => setOpenFilter(null)}
+            anchorRef={topicsCellRef}
           />
         )}
       </div>

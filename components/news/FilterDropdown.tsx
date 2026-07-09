@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "@/components/ui/Icon";
 import { ICONS } from "@/lib/icons";
 import type { FilterOption } from "@/types/news";
@@ -12,28 +13,97 @@ interface FilterDropdownProps {
   onToggle: (value: string) => void;
   onClear: () => void;
   onClose: () => void;
+  /** The trigger button/cell this dropdown is anchored to — used to compute viewport position. */
+  anchorRef: RefObject<HTMLElement | null>;
   align?: "left" | "right";
 }
 
-export function FilterDropdown({ title, options, selected, onToggle, onClear, onClose, align = "left" }: FilterDropdownProps) {
+const PANEL_WIDTH = 250;
+const VIEWPORT_MARGIN = 8;
+
+/**
+ * Renders via a portal directly into document.body, positioned with
+ * getBoundingClientRect() + `position: fixed`, rather than `position:
+ * absolute` inside the table's DOM tree. The table's own horizontal-scroll
+ * wrapper (.tas-scroll-x, see NewsTable.tsx) sets `overflow-x: auto`, which
+ * per the CSS overflow spec forces `overflow-y` to `auto` too when it's left
+ * at its default — so that wrapper clips ANY descendant's vertical overflow,
+ * including this dropdown, no matter how high its z-index is (overflow
+ * clipping on an ancestor always wins over z-index). Escaping the DOM tree
+ * entirely via a portal is the only way to guarantee the panel isn't clipped
+ * by that ancestor (or the sticky header's own stacking context).
+ */
+export function FilterDropdown({ title, options, selected, onToggle, onClear, onClose, anchorRef, align = "right" }: FilterDropdownProps) {
   const [q, setQ] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<{ top: number; left: number; maxHeight: number; visibility: "hidden" | "visible" }>({
+    top: 0,
+    left: 0,
+    maxHeight: 340,
+    visibility: "hidden",
+  });
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Two-pass positioning: mount off-screen (hidden) first so the panel's
+  // real height (which depends on option count) can be measured, then flip
+  // above the anchor if there isn't room below, and clamp horizontally so it
+  // never renders off-screen either.
+  useLayoutEffect(() => {
+    function updatePosition() {
+      const anchor = anchorRef.current;
+      const panel = panelRef.current;
+      if (!anchor) return;
+      const anchorRect = anchor.getBoundingClientRect();
+      const panelHeight = panel?.getBoundingClientRect().height ?? 340;
+
+      const spaceBelow = window.innerHeight - anchorRect.bottom - VIEWPORT_MARGIN;
+      const spaceAbove = anchorRect.top - VIEWPORT_MARGIN;
+      const openUpward = spaceBelow < panelHeight && spaceAbove > spaceBelow;
+
+      const top = openUpward ? Math.max(VIEWPORT_MARGIN, anchorRect.top - panelHeight - 8) : anchorRect.bottom + 8;
+      const maxHeight = openUpward ? Math.min(panelHeight, spaceAbove) : Math.min(panelHeight, spaceBelow);
+
+      let left = align === "right" ? anchorRect.right - PANEL_WIDTH : anchorRect.left;
+      left = Math.max(VIEWPORT_MARGIN, Math.min(left, window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN));
+
+      setStyle({ top, left, maxHeight, visibility: "visible" });
+    }
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    // capture:true — the table's internal scroll containers (.tas-scroll-x,
+    // the sticky header) don't bubble scroll events to window, but capture
+    // phase still sees them.
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [anchorRef, align, q]);
+
   const filtered = options.filter((o) => o.label.toLowerCase().includes(q.toLowerCase()));
 
-  return (
+  return createPortal(
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 200 }} />
       <div
+        ref={panelRef}
         role="dialog"
         style={{
-          position: "absolute",
-          top: "calc(100% + 8px)",
-          [align]: 0,
-          zIndex: 61,
-          width: 250,
+          position: "fixed",
+          top: style.top,
+          left: style.left,
+          zIndex: 201,
+          width: PANEL_WIDTH,
+          maxHeight: style.maxHeight,
+          visibility: style.visibility,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
           background: "var(--bg-overlay)",
           border: "1px solid var(--border-strong)",
           borderRadius: "var(--radius-md)",
@@ -42,7 +112,7 @@ export function FilterDropdown({ title, options, selected, onToggle, onClear, on
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ position: "relative", marginBottom: 8 }}>
+        <div style={{ position: "relative", marginBottom: 8, flex: "none" }}>
           <span
             style={{
               position: "absolute",
@@ -73,7 +143,7 @@ export function FilterDropdown({ title, options, selected, onToggle, onClear, on
             }}
           />
         </div>
-        <div style={{ maxHeight: 232, overflowY: "auto", display: "flex", flexDirection: "column", gap: 1 }}>
+        <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 1, flex: "1 1 auto" }}>
           {filtered.length === 0 && (
             <div
               style={{
@@ -146,6 +216,7 @@ export function FilterDropdown({ title, options, selected, onToggle, onClear, on
             marginTop: 8,
             paddingTop: 8,
             borderTop: "1px solid var(--border-subtle)",
+            flex: "none",
           }}
         >
           <span style={{ font: "var(--fw-regular) var(--fs-2xs)/1 var(--font-mono)", color: "var(--text-quaternary)" }}>
@@ -165,6 +236,7 @@ export function FilterDropdown({ title, options, selected, onToggle, onClear, on
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body
   );
 }
