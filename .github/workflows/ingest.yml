@@ -2,9 +2,11 @@ name: Ingest AI news
 
 on:
   schedule:
-    # Every 2 hours. GitHub's scheduler is best-effort and can lag during
-    # high load — treat this as "roughly every 2 hours," not a guarantee.
-    - cron: "0 */2 * * *"
+    # Every 6 hours (matches GraphOne's cron_scheduler.py: schedule.every(6).hours,
+    # "boss wants it to run 3-4 times in 24 hours"). GitHub's scheduler is
+    # best-effort and can lag during high load — treat this as "roughly every
+    # 6 hours," not a guarantee.
+    - cron: "0 */6 * * *"
   workflow_dispatch: {}
 
 jobs:
