@@ -1,0 +1,381 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Self-hosted fonts — bundled locally in /public/fonts so the app
+   never depends on network access to Google Fonts at build or
+   runtime (works offline, behind firewalls, on any host).
+   ============================================================ */
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/geist-sans.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/geist-mono.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================================
+   The AI Signal — design tokens
+   Dark-first. Near-black canvas, cool neutral greys, a monochrome
+   (light-on-dark) accent, plus grayscale semantic + category tones.
+   ============================================================ */
+:root {
+  /* ---- Fonts (self-hosted, see @font-face above) ---- */
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+
+  /* ---- Base canvas & surfaces (dark, cool-neutral) ---- */
+  --bg-base: #08090A;
+  --bg-sunken: #050506;
+  --bg-surface: #0F1011;
+  --bg-surface-2: #141517;
+  --bg-elevated: #191A1C;
+  --bg-overlay: #1F2023;
+  --bg-hover: #202124;
+  --bg-active: #26272B;
+  --bg-inset: #0B0C0D;
+
+  /* ---- Neutral ramp (raw greys, light -> dark) ---- */
+  --neutral-0: #FFFFFF;
+  --neutral-50: #F7F8F8;
+  --neutral-100: #E6E7E9;
+  --neutral-200: #C9CBCF;
+  --neutral-300: #A6A9B0;
+  --neutral-400: #8A8F98;
+  --neutral-500: #6E7178;
+  --neutral-600: #52555B;
+  --neutral-700: #3A3C41;
+  --neutral-800: #26272B;
+  --neutral-900: #161719;
+  --neutral-950: #0C0D0E;
+
+  /* ---- Text ---- */
+  --text-primary: #F7F8F8;
+  --text-secondary: #B4B7BD;
+  --text-tertiary: #8A8F98;
+  --text-quaternary: #62666D;
+  --text-on-accent: #0A0A0B;
+  --text-on-light: #0A0A0B;
+
+  /* ---- Borders & dividers (white alphas over dark) ---- */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-focus: rgba(255, 255, 255, 0.30);
+
+  /* ---- Accent (monochrome — Linear-style light interactive) ---- */
+  --accent: #E6E7E9;
+  --accent-hover: #F7F8F8;
+  --accent-active: #C9CBCF;
+  --accent-muted: rgba(255, 255, 255, 0.10);
+  --accent-subtle: rgba(255, 255, 255, 0.06);
+  --accent-text: #E6E7E9;
+  --accent-ring: rgba(255, 255, 255, 0.22);
+
+  /* ---- Light "cream" action ---- */
+  --cream: #EEEFF1;
+  --cream-hover: #FFFFFF;
+  --cream-active: #D9DBDF;
+
+  /* ---- Semantic status (monochrome — differentiated by lightness) ---- */
+  --success: #B4B7BD;
+  --success-muted: rgba(255, 255, 255, 0.10);
+  --warning: #D4D6DA;
+  --warning-muted: rgba(255, 255, 255, 0.10);
+  --danger: #F2F3F4;
+  --danger-muted: rgba(255, 255, 255, 0.12);
+  --info: #9CA3AF;
+  --info-muted: rgba(255, 255, 255, 0.08);
+
+  /* ---- Selection & scrim ---- */
+  --selection-bg: rgba(255, 255, 255, 0.16);
+  --scrim: rgba(4, 4, 5, 0.72);
+
+  /* ---- Purple accent — active tab, links, buttons, pagination, focus ---- */
+  --purple: #5E5CE6;
+  --purple-hover: #6E6CF0;
+  --purple-active: #4F4DD6;
+  --purple-soft: rgba(94, 92, 230, 0.14);
+  --purple-border: rgba(94, 92, 230, 0.45);
+  --purple-text: #9B99F5;
+
+  /* ---- Weights ---- */
+  --fw-light: 300;
+  --fw-regular: 400;
+  --fw-book: 450;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* ---- Display sizes (hero / section heads) ---- */
+  --fs-display-2xl: 5rem;
+  --fs-display-xl: 3.75rem;
+  --fs-display-lg: 2.75rem;
+
+  /* ---- Static type scale ---- */
+  --fs-h1: 2rem;
+  --fs-h2: 1.5rem;
+  --fs-h3: 1.25rem;
+  --fs-h4: 1.0625rem;
+  --fs-lg: 1.125rem;
+  --fs-body: 0.9375rem;
+  --fs-sm: 0.875rem;
+  --fs-xs: 0.8125rem;
+  --fs-2xs: 0.75rem;
+  --fs-micro: 0.6875rem;
+
+  /* ---- Line heights ---- */
+  --lh-none: 1;
+  --lh-tight: 1.1;
+  --lh-snug: 1.25;
+  --lh-normal: 1.5;
+  --lh-relaxed: 1.65;
+
+  /* ---- Letter spacing ---- */
+  --ls-tighter: -0.03em;
+  --ls-tight: -0.02em;
+  --ls-snug: -0.01em;
+  --ls-normal: 0;
+  --ls-wide: 0.02em;
+  --ls-wider: 0.08em;
+
+  /* ---- Spacing scale (4px base grid) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --gutter: 24px;
+  --gutter-tight: 12px;
+  --page-pad-x: 32px;
+  --page-pad-x-sm: 20px;
+  --section-y: 96px;
+  --content-max: 1200px;
+  --content-wide: 1440px;
+  --sidebar-w: 240px;
+
+  /* ---- Radii & border widths ---- */
+  --radius-none: 0;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+  --border-width: 1px;
+  --border-width-2: 1.5px;
+  --focus-ring-width: 2px;
+
+  /* ---- Elevation ---- */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-xl: 0 28px 70px rgba(0, 0, 0, 0.62);
+  --shadow-popover: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-modal: 0 40px 90px rgba(0, 0, 0, 0.70), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --highlight-top: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --highlight-inset: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --glow-accent: 0 0 0 3px var(--accent-ring);
+  --glow-soft: 0 0 24px rgba(255, 255, 255, 0.12);
+  --focus-ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent-ring);
+
+  /* ---- Motion ---- */
+  --dur-instant: 60ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --dur-slower: 400ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-emphasis: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-colors: color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+  --transition-transform: transform var(--dur-base) var(--ease-out);
+  --transition-base: all var(--dur-base) var(--ease-standard);
+}
+
+/* ============================================================
+   Base resets & element defaults
+   ============================================================ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  font-feature-settings: "cv11", "ss01";
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: var(--fw-regular) var(--fs-body) / var(--lh-normal) var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--text-primary);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h1, h2, h3, h4, h5, h6, p, figure {
+  margin: 0;
+}
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+img, svg, video {
+  display: block;
+  max-width: 100%;
+}
+
+code, kbd, pre, samp {
+  font-family: var(--font-mono);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--neutral-700) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--neutral-800);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--neutral-700);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ============================================================
+   Module-level interaction styles
+   ============================================================ */
+
+/* entrance — kept subtle & safe: resting state is fully visible even
+   if the animation never runs */
+@keyframes tasFadeUp {
+  from { transform: translateY(5px); }
+  to { transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tas-enter { animation: tasFadeUp var(--dur-base) var(--ease-out) both; }
+}
+
+/* shimmer skeleton */
+@keyframes tasShimmer {
+  0% { background-position: -180% 0; }
+  100% { background-position: 180% 0; }
+}
+.tas-shimmer {
+  background: linear-gradient(90deg, var(--bg-surface-2) 25%, var(--bg-hover) 45%, var(--bg-surface-2) 65%);
+  background-size: 220% 100%;
+  animation: tasShimmer 1.4s linear infinite;
+}
+
+/* links */
+.tas-link { color: var(--purple-text); text-decoration: none; transition: var(--transition-colors); }
+.tas-link:hover { color: var(--purple-hover); text-decoration: underline; }
+
+/* row hover */
+.tas-row { transition: background-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard); }
+.tas-row:hover { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border-default); border-radius: var(--radius-md); }
+.tas-row:hover .tas-row-title { color: var(--text-primary); }
+.tas-row:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--border-focus); border-radius: var(--radius-md); }
+
+/* chips / links hover */
+.tas-chip:not([data-active]):hover { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text-primary); }
+.tas-topic:hover { color: var(--text-primary); border-color: var(--border-strong); background: var(--bg-hover); }
+.tas-vote:not([data-on]):hover { color: var(--text-secondary); border-color: var(--border-strong); background: var(--bg-hover); }
+.tas-page:not([data-current]):not(:disabled):hover { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text-primary); }
+.tas-crumb:hover { color: var(--text-secondary); }
+
+/* related list hover */
+.tas-related:hover { background: var(--bg-hover); }
+
+/* table header sort + filter */
+.tas-sort:not([data-active]):hover { color: var(--text-secondary); }
+.tas-funnel:not([data-active]):hover { color: var(--text-secondary); background: var(--bg-hover); }
+
+/* filter dropdown options */
+.tas-opt:hover { background: var(--bg-hover); }
+
+/* row inline actions */
+.tas-act:hover { color: var(--text-primary); background: var(--bg-hover); }
+.tas-act-box:hover { color: var(--text-primary); border-color: var(--border-strong); background: var(--bg-hover); }
+
+/* search bar + header buttons */
+.tas-search { transition: border-color 240ms var(--ease-standard), box-shadow 240ms var(--ease-standard); }
+.tas-search:focus-within { border-color: var(--purple) !important; box-shadow: 0 0 0 3px var(--purple-soft), 0 0 28px 0 rgba(94, 92, 230, 0.55) !important; }
+.tas-search input::placeholder { color: var(--text-tertiary); }
+
+/* horizontally scrollable strips (filter chips) — scroll, no visible scrollbar */
+.tas-scroll-x { scrollbar-width: none; -ms-overflow-style: none; }
+.tas-scroll-x::-webkit-scrollbar { display: none; }
+
+/* sticky title column (mobile/tablet scroll table) — keep hover tint in sync with the row */
+.tas-row:hover .tas-sticky-cell { background: var(--bg-hover); }
+.tas-hbtn:hover { color: var(--text-primary); border-color: var(--border-strong); background: var(--bg-hover); }
+
+/* detail: sidebar rows + back link */
+.tas-simcard:hover { border-color: var(--border-strong); background: var(--bg-surface-2); }
+.tas-savebtn:not([data-on]):hover { color: var(--text-primary); border-color: var(--border-strong); background: var(--bg-hover); }
+.tas-srcrow:hover, .tas-relrow:hover { background: var(--bg-hover); }
+.tas-backlink:hover { color: var(--text-primary); }
+
+/* comments */
+.tas-cinput::placeholder { color: var(--text-quaternary); }
+.tas-cinput:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06); }
+.tas-cpost:not(:disabled):hover { filter: brightness(1.06); }

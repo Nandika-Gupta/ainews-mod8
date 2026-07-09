@@ -1,0 +1,44 @@
+name: Ingest AI news
+
+on:
+  schedule:
+    # Every 2 hours. GitHub's scheduler is best-effort and can lag during
+    # high load — treat this as "roughly every 2 hours," not a guarantee.
+    - cron: "0 */2 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx prisma generate
+
+      - name: Run ingestion
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run ingest
+
+      - name: Resolve any missing publisher logos
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run resolve-logos
+
+      - name: Commit newly downloaded logos, if any
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/logos/publishers
+          git diff --cached --quiet || git commit -m "chore: cache newly resolved publisher logos [skip ci]"
+          git push

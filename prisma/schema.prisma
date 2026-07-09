@@ -1,0 +1,121 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // The app itself connects through DATABASE_URL — normally the pooled
+  // connection (e.g. Supabase's transaction-mode pooler on :6543), which
+  // scales far better under concurrent requests than a direct connection.
+  url       = env("DATABASE_URL")
+  // Schema migrations need a real, unpooled connection (transaction pooling
+  // doesn't support the session-level features migrations rely on) — this is
+  // only ever used by `prisma migrate`/`prisma db push`, never by the app at
+  // runtime. If you're not using a pooler (e.g. plain local Postgres), set
+  // DIRECT_URL to the same value as DATABASE_URL.
+  directUrl = env("DIRECT_URL")
+}
+
+/// A news OUTLET (Reuters, TechCrunch, OpenAI's own blog, ...). This is whose
+/// logo the UI shows and whose name the "Source" column/link displays — never
+/// the company an article happens to be ABOUT.
+model Publisher {
+  id               String   @id @default(cuid())
+  name             String
+  /// Canonical, normalized domain (no "www.", no scheme) — unique identity for matching.
+  domain           String   @unique
+  website          String
+  /// Resolved once at ingestion time and cached — never re-fetched per request.
+  logoUrl          String?
+  faviconUrl       String?
+  /// Cosmetic accent color for the tinted icon background (matches current design).
+  colorHex         String?
+  followersLabel   String?
+  credibilityScore Float    @default(0.8)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  articles NewsArticle[]
+
+  @@index([name])
+}
+
+/// A single tag such as "OpenAI", "AI Regulation", "Robotics" — many-to-many
+/// with articles, counted for the Topics filter dropdown.
+model Topic {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  articles NewsArticle[]
+}
+
+model NewsArticle {
+  id         String   @id @default(cuid())
+  /// URL-safe slug, used for /news/[slug].
+  slug       String   @unique
+  title      String
+  /// Short one-line dek/description as extracted from the source (RSS description / meta tag).
+  dek        String
+  /// The "AI Summary" shown on the article page (~4-5 lines).
+  aiSummary  String
+  /// The ORIGINAL article URL at the publisher — the Source link and article
+  /// page always resolve here, never to the publisher's homepage.
+  articleUrl String   @unique
+
+  publisherId String
+  publisher   Publisher @relation(fields: [publisherId], references: [id])
+
+  /// Category page key, e.g. "openai", "research", "robotics".
+  category String
+
+  /// Filter-chip tags: subset of trending/research/breakthroughs/startups/opensource/funding.
+  filterTags String[] @default([])
+
+  topics Topic[]
+
+  publishedAt DateTime
+  upvotes     Int      @default(0)
+  downvotes   Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookmarks Bookmark[]
+  votes     Vote[]
+
+  @@index([publishedAt])
+  @@index([publisherId])
+  @@index([category])
+}
+
+/// Optional — anonymous (no auth system yet) per-browser bookmark, keyed by a
+/// client-generated id. Not currently wired into the frontend (which still
+/// uses localStorage directly per the existing, protected Bookmark UI), but
+/// modeled so a real backend-synced bookmark feature can be added later.
+model Bookmark {
+  id        String   @id @default(cuid())
+  articleId String
+  article   NewsArticle @relation(fields: [articleId], references: [id])
+  clientId  String
+  createdAt DateTime @default(now())
+
+  @@unique([articleId, clientId])
+}
+
+/// Optional — anonymous upvote/downvote record. NewsArticle.upvotes/downvotes
+/// are the authoritative aggregate counts the UI reads today; this table lets
+/// a future backend-synced vote feature prevent double-voting per client.
+model Vote {
+  id        String   @id @default(cuid())
+  articleId String
+  article   NewsArticle @relation(fields: [articleId], references: [id])
+  clientId  String
+  value     Int
+  createdAt DateTime @default(now())
+
+  @@unique([articleId, clientId])
+}
