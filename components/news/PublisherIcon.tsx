@@ -36,14 +36,32 @@ export function PublisherIcon({ source, box = 44 }: PublisherIconProps) {
   // next candidate regardless.
   useEffect(() => {
     if (index >= candidates.length) return;
-    const check = () => {
+    // Fires on the very next paint (~16ms after mount) — far too soon for a
+    // real network image request to have finished normally, so this must
+    // NOT treat "still loading" (!img.complete) as failure, or it advances
+    // past every real logo before it had any chance to load (invisible on
+    // localhost, where same-machine requests often do finish within a
+    // frame — but on any real network, i.e. production, this fired on
+    // nearly every image and cascaded straight to the last-resort
+    // placeholder). Only catches a request that has ALREADY synchronously
+    // resolved to a broken image before this effect ran.
+    const checkImmediate = () => {
+      const img = imgRef.current;
+      if (img && img.complete && img.naturalWidth === 0) {
+        setIndex((i) => i + 1);
+      }
+    };
+    // By 2.5s, any real image load should be long done — if it still hasn't
+    // fired load/error at all, that's a genuine hang, so the broader
+    // "not complete OR zero-width" check is correct here.
+    const checkAfterTimeout = () => {
       const img = imgRef.current;
       if (img && (!img.complete || img.naturalWidth === 0)) {
         setIndex((i) => i + 1);
       }
     };
-    const immediate = requestAnimationFrame(check); // catches the "already failed before mount" race
-    const timeout = setTimeout(check, 2500); // catches requests that hang without ever erroring
+    const immediate = requestAnimationFrame(checkImmediate);
+    const timeout = setTimeout(checkAfterTimeout, 2500);
     return () => {
       cancelAnimationFrame(immediate);
       clearTimeout(timeout);

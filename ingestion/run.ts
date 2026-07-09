@@ -10,6 +10,9 @@
 import { prisma } from "../lib/prisma";
 import { FEED_SOURCES } from "./sources";
 import { ingestAll, ingestHackerNewsDiscovery, loadRecentTitleIndex } from "./pipeline";
+import { pruneToMostRecent } from "./prune";
+
+const MAX_LIVE_ARTICLES = 200;
 
 async function main() {
   console.log(`Ingesting ${FEED_SOURCES.length} feed source(s)...\n`);
@@ -34,7 +37,9 @@ async function main() {
     for (const err of r.errors.slice(0, 3)) console.log(`   ! ${err}`);
   }
 
-  console.log(`\nDone. ${totalCreated} new article(s) ingested.`);
+  const pruned = await pruneToMostRecent(MAX_LIVE_ARTICLES);
+
+  console.log(`\nDone. ${totalCreated} new article(s) ingested.${pruned ? ` Pruned ${pruned} older article(s) to stay at ${MAX_LIVE_ARTICLES}.` : ""}`);
 }
 
 main()
