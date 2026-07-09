@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- BareMetalRT mark: transformer layers as an overlapping isometric slab stack (indigo)
+       on a dark tile with a chamfered corner that matches the app's angular UI cuts. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16161c"/><stop offset="1" stop-color="#0b0b11"/>
+    </linearGradient>
+    <clipPath id="clip"><path d="M9,1 H206 L255,50 V247 A8,8 0 0 1 247,255 H9 A8,8 0 0 1 1,247 V9 A8,8 0 0 1 9,1 Z"/></clipPath>
+    <filter id="sh" x="-25%" y="-25%" width="150%" height="150%"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#000" flood-opacity="0.4"/></filter>
+  </defs>
+  <path d="M9,1 H206 L255,50 V247 A8,8 0 0 1 247,255 H9 A8,8 0 0 1 1,247 V9 A8,8 0 0 1 9,1 Z" fill="url(#tile)"/>
+  <g clip-path="url(#clip)" filter="url(#sh)">
+  <polygon points="40,181 164,181 164,192 40,192" fill="#4f46e5"/>
+  <polygon points="92,165 216,165 164,181 40,181" fill="#6a73f3"/>
+  <polygon points="40,155.25 164,155.25 164,166.25 40,166.25" fill="#4f46e5"/>
+  <polygon points="92,139.25 216,139.25 164,155.25 40,155.25" fill="#7a82f5"/>
+  <polygon points="40,129.5 164,129.5 164,140.5 40,140.5" fill="#4f46e5"/>
+  <polygon points="92,113.5 216,113.5 164,129.5 40,129.5" fill="#8991f7"/>
+  <polygon points="40,103.75 164,103.75 164,114.75 40,114.75" fill="#4f46e5"/>
+  <polygon points="92,87.75 216,87.75 164,103.75 40,103.75" fill="#98a0f9"/>
+  <polygon points="40,78 164,78 164,89 40,89" fill="#4f46e5"/>
+  <polygon points="92,62 216,62 164,78 40,78" fill="#a8affb"/>
+  </g>
+  <path d="M9,1 H206 L255,50 V247 A8,8 0 0 1 247,255 H9 A8,8 0 0 1 1,247 V9 A8,8 0 0 1 9,1 Z" fill="none" stroke="#32323e" stroke-width="2"/>
+</svg>
