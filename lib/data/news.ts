@@ -13,6 +13,16 @@ import type { NewsArticle as PrismaArticle, Publisher, Topic } from "@prisma/cli
 
 type ArticleRow = PrismaArticle & { publisher: Publisher; topics: Topic[] };
 
+/** Logs how long each query takes — shows up in Vercel's function logs, since this is the only place that's slow enough to matter (see /news's multi-second loads). */
+async function withTiming<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  try {
+    return await fn();
+  } finally {
+    console.log(`[timing] ${label}: ${Date.now() - start}ms`);
+  }
+}
+
 /** Ranks by net votes (desc) and assigns a stable 0-100 trending score, same formula as before. */
 function withTrendingScores(rows: ArticleRow[]): NewsArticle[] {
   const ranked = [...rows].sort((x, y) => y.upvotes - y.downvotes - (x.upvotes - x.downvotes));
@@ -42,16 +52,20 @@ function withTrendingScores(rows: ArticleRow[]): NewsArticle[] {
 const ARTICLE_INCLUDE = { publisher: true, topics: true } as const;
 
 export async function getArticles(): Promise<NewsArticle[]> {
-  const rows = await prisma.newsArticle.findMany({
-    include: ARTICLE_INCLUDE,
-    orderBy: { publishedAt: "desc" },
-  });
+  const rows = await withTiming("getArticles db query", () =>
+    prisma.newsArticle.findMany({
+      include: ARTICLE_INCLUDE,
+      orderBy: { publishedAt: "desc" },
+    })
+  );
   return withTrendingScores(rows);
 }
 
 /** Cached per-request — generateMetadata() and the page component both call this for the same slug. */
 export const getArticleBySlug = cache(async (slug: string): Promise<NewsArticle | null> => {
-  const row = await prisma.newsArticle.findUnique({ where: { slug }, include: ARTICLE_INCLUDE });
+  const row = await withTiming(`getArticleBySlug(${slug}) db query`, () =>
+    prisma.newsArticle.findUnique({ where: { slug }, include: ARTICLE_INCLUDE })
+  );
   if (!row) return null;
   return withTrendingScores([row])[0];
 });
@@ -101,7 +115,7 @@ export async function getRecentSlugs(limit = 40): Promise<string[]> {
 
 /** Sources map keyed by Publisher id, matching NewsArticle.source — the shape every component already expects. */
 export async function getSourcesMap(): Promise<Record<string, NewsSource>> {
-  const publishers = await prisma.publisher.findMany();
+  const publishers = await withTiming("getSourcesMap db query", () => prisma.publisher.findMany());
   return Object.fromEntries(
     publishers.map((p) => [
       p.id,
@@ -111,7 +125,9 @@ export async function getSourcesMap(): Promise<Record<string, NewsSource>> {
 }
 
 export async function getCategories(): Promise<NewsCategory[]> {
-  const grouped = await prisma.newsArticle.groupBy({ by: ["category"], _count: { category: true } });
+  const grouped = await withTiming("getCategories db query", () =>
+    prisma.newsArticle.groupBy({ by: ["category"], _count: { category: true } })
+  );
   return grouped
     .sort((a, b) => b._count.category - a._count.category)
     .map((g) => ({ key: g.category, label: labelizeCategory(g.category), count: g._count.category }));
@@ -152,15 +168,18 @@ const MAX_DYNAMIC_CHIPS = 5;
  */
 export async function getFilterChips(): Promise<NewsFilterChip[]> {
   const since = new Date(Date.now() - DYNAMIC_CHIP_WINDOW_MS);
-  const rows = await prisma.$queryRaw<{ name: string; count: bigint }[]>`
-    SELECT t.name, count(*) as count
-    FROM "Topic" t
-    JOIN "_NewsArticleToTopic" nt ON t.id = nt."B"
-    JOIN "NewsArticle" a ON a.id = nt."A"
-    WHERE a."publishedAt" >= ${since}
-    GROUP BY t.name
-    ORDER BY count(*) DESC
-  `;
+  const rows = await withTiming(
+    "getFilterChips db query",
+    () => prisma.$queryRaw<{ name: string; count: bigint }[]>`
+      SELECT t.name, count(*) as count
+      FROM "Topic" t
+      JOIN "_NewsArticleToTopic" nt ON t.id = nt."B"
+      JOIN "NewsArticle" a ON a.id = nt."A"
+      WHERE a."publishedAt" >= ${since}
+      GROUP BY t.name
+      ORDER BY count(*) DESC
+    `
+  );
 
   const dynamicChips: NewsFilterChip[] = rows
     .filter((r) => r.name !== GENERIC_TOPIC_FALLBACK && !COMPANY_TOPIC_LABELS.has(r.name))
