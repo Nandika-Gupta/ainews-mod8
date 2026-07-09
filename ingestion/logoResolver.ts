@@ -137,14 +137,26 @@ async function downloadAndStore(url: string, domain: string): Promise<string | n
 /**
  * Domains verified (via LOGO_RESOLVER_DEBUG) to sit behind enterprise bot
  * protection that a plain fetch() cannot pass — DataDome (Reuters), Vercel
- * Security Checkpoint (VentureBeat), Cloudflare WAF on a paywalled site (The
- * Information). These aren't timeouts or missing-icon cases that a retry or
- * header tweak would fix, so we skip straight to the favicon-aggregator
- * fallback instead of burning a 10s timeout on every ingestion run. Revisit
- * if a publisher's protection changes — remove the entry and re-run
- * `npm run resolve-logos` with debug logging to confirm before deleting.
+ * Security Checkpoint (VentureBeat), Cloudflare/WAF 403s (The Information,
+ * Fast Company, Axios, WSJ, FT, ghacks.net, techdirt.com). These aren't
+ * timeouts or missing-icon cases that a retry or header tweak would fix, so
+ * we skip straight to the favicon-aggregator fallback instead of burning a
+ * 10s timeout on every ingestion run. Revisit if a publisher's protection
+ * changes — remove the entry and re-run `npm run resolve-logos` with debug
+ * logging to confirm before deleting.
  */
-const KNOWN_BOT_PROTECTED_DOMAINS = new Set(["reuters.com", "venturebeat.com", "theinformation.com"]);
+const KNOWN_BOT_PROTECTED_DOMAINS = new Set([
+  "reuters.com",
+  "venturebeat.com",
+  "theinformation.com",
+  "fastcompany.com",
+  "axios.com",
+  "wsj.com",
+  "ft.com",
+  "whbl.com",
+  "ghacks.net",
+  "techdirt.com",
+]);
 
 /**
  * Full resolver: fetch the publisher's homepage once, parse every declared
