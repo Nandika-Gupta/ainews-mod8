@@ -26,7 +26,12 @@ export async function parseFeed(feedUrl: string, limit = 30): Promise<FeedEntry[
     const link = (item.link || "").trim();
     if (!title || !link) continue;
 
-    const summary = stripHtml(item.contentSnippet || item.content || item.summary || title).slice(0, 500);
+    // Deliberately no `|| title` fallback here — a feed item with no real
+    // description should leave `summary` empty so pipeline.ts's enrichment
+    // step (fetch the article page's own OG/JSON-LD description or body
+    // text) can fill it with real content, rather than the title silently
+    // masquerading as a description for the rest of the pipeline.
+    const summary = stripHtml(item.contentSnippet || item.content || item.summary || "").slice(0, 500);
 
     entries.push({
       title,

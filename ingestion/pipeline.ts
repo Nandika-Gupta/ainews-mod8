@@ -27,18 +27,19 @@ import type { FeedSource } from "./sources";
  * technique GraphOne's tests demonstrated for schema.org/Product, retargeted
  * at NewsArticle.
  */
-async function enrichFromArticlePage(articleUrl: string): Promise<{ publishedAt: Date | null; description: string | null }> {
+async function enrichFromArticlePage(articleUrl: string): Promise<{ publishedAt: Date | null; description: string | null; bodyExcerpt: string | null }> {
   try {
     const res = await fetch(articleUrl, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return { publishedAt: null, description: null };
+    if (!res.ok) return { publishedAt: null, description: null, bodyExcerpt: null };
     const html = await res.text();
     const meta = extractArticleMetadata(html);
     return {
       publishedAt: robustParseDate(meta.datePublished),
       description: meta.description,
+      bodyExcerpt: meta.bodyExcerpt,
     };
   } catch {
-    return { publishedAt: null, description: null };
+    return { publishedAt: null, description: null, bodyExcerpt: null };
   }
 }
 
@@ -133,10 +134,12 @@ async function ingestEntry(
 
   let publishedAt = robustParseDate(entry.publishedRaw);
   let summary = entry.summary;
+  let bodyExcerpt: string | null = null;
   if (!publishedAt || !summary) {
     const enriched = await enrichFromArticlePage(articleUrl);
     publishedAt = publishedAt ?? enriched.publishedAt ?? new Date();
     if (!summary && enriched.description) summary = enriched.description;
+    bodyExcerpt = enriched.bodyExcerpt;
   }
 
   // "discovery" sources (e.g. Hacker News — see hnDiscovery.ts) link to
@@ -149,17 +152,23 @@ async function ingestEntry(
   const slug = await uniqueSlug(title);
   const topics = deriveTopics(entry.title, summary);
 
-  // Real LLM summary via the free-tier waterfall (see llmSummarizer.ts) —
-  // never blocks or fails ingestion: generateAiSummary() returns null on any
-  // failure (missing keys, all three tiers down, bad response), and the raw
-  // RSS/OpenGraph description is used as-is when that happens.
-  const aiSummary = (await generateAiSummary(title, summary)) ?? summary;
+  // Fallback chain: LLM summary -> raw RSS/OG description -> article body
+  // excerpt -> a plainly-labeled "no summary" string. The title is NEVER
+  // used as a stand-in summary — feeding a title-only "description" to the
+  // LLM invites it to hallucinate plausible-sounding but unverified details
+  // (confirmed live), so the LLM is only called when there's real source
+  // text that isn't just the headline again.
+  const realContent = (summary || bodyExcerpt || "").trim();
+  const hasRealContent = realContent.length > 0 && realContent !== title.trim();
+  const llmSummary = hasRealContent ? await generateAiSummary(title, realContent) : null;
+  const dek = summary || bodyExcerpt || "No summary available for this article.";
+  const aiSummary = llmSummary || dek;
 
   await prisma.newsArticle.create({
     data: {
       slug,
       title,
-      dek: summary,
+      dek,
       aiSummary,
       articleUrl,
       publisherId: publisher.id,

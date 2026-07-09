@@ -21,6 +21,20 @@ export interface ExtractedArticleMetadata {
   publisherName: string | null;
   publisherLogoUrl: string | null;
   imageUrl: string | null;
+  /** Plain-text excerpt of the actual article body — last-resort real content when there's no description at all (see pipeline.ts's summary fallback chain). */
+  bodyExcerpt: string | null;
+}
+
+const BODY_EXCERPT_MAX_LENGTH = 600;
+
+/** Plain-text excerpt of the page's main content, stripped of chrome (nav/header/footer/scripts). */
+function extractBodyExcerpt(html: string): string | null {
+  const $ = cheerio.load(html);
+  $("script, style, nav, header, footer, noscript, svg, form, iframe").remove();
+  const container = $("article").first().length ? $("article").first() : $("main").first().length ? $("main").first() : $("body");
+  const text = cleanText(container.text());
+  if (!text) return null;
+  return text.length > BODY_EXCERPT_MAX_LENGTH ? `${text.slice(0, BODY_EXCERPT_MAX_LENGTH)}…` : text;
 }
 
 function firstOf<T>(value: T | T[] | undefined): T | undefined {
@@ -88,5 +102,6 @@ export function extractArticleMetadata(html: string): ExtractedArticleMetadata {
     publisherName: publisherField?.name ? cleanText(publisherField.name) : og["og:site_name"] || null,
     publisherLogoUrl: publisherLogo,
     imageUrl: (jsonLd?.image as string) || og["og:image"] || null,
+    bodyExcerpt: extractBodyExcerpt(html),
   };
 }

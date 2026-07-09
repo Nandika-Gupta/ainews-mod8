@@ -57,7 +57,12 @@ async function searchOneQuery(query: string): Promise<FeedEntry[]> {
       .map((h) => ({
         title: cleanText(h.title),
         link: h.url,
-        summary: cleanText(h.title),
+        // Deliberately empty, not a copy of the title — HN Algolia hits carry
+        // no real article description. Leaving this falsy lets pipeline.ts's
+        // enrichFromArticlePage() fetch the linked page's actual OG/JSON-LD
+        // description (or body-text excerpt) instead of the LLM/fallback
+        // chain ever operating on "summary" that's secretly just the title.
+        summary: "",
         publishedRaw: h.created_at,
       }));
   } catch {

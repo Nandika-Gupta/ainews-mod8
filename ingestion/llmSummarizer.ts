@@ -23,6 +23,11 @@ const GROQ_MODEL = "llama-3.1-8b-instant";
 const REQUEST_TIMEOUT_MS = 20_000;
 const WATERFALL_RETRIES = 2;
 
+const DEBUG = !!process.env.LLM_SUMMARIZER_DEBUG;
+function debug(msg: string): void {
+  if (DEBUG) console.log(`  [llm-debug] ${msg}`);
+}
+
 interface WaterfallResult {
   result: Record<string, unknown> | null;
   rateLimited: boolean;
@@ -65,14 +70,26 @@ async function tryGemini(prompt: string, apiKey: string): Promise<WaterfallResul
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (res.status === 429) return { result: null, rateLimited: true };
-    if (!res.ok) return FAILED;
+    if (res.status === 429) {
+      debug(`Gemini -> 429 rate limited`);
+      return { result: null, rateLimited: true };
+    }
+    if (!res.ok) {
+      debug(`Gemini -> HTTP ${res.status} ${res.statusText}`);
+      return FAILED;
+    }
 
     const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (typeof text !== "string") return FAILED;
-    return { result: safeParseJson(text), rateLimited: false };
-  } catch {
+    if (typeof text !== "string") {
+      debug(`Gemini -> no text in response: ${JSON.stringify(data).slice(0, 200)}`);
+      return FAILED;
+    }
+    const parsed = safeParseJson(text);
+    debug(`Gemini -> ${parsed ? "success" : `failed to parse JSON from: ${text.slice(0, 150)}`}`);
+    return { result: parsed, rateLimited: false };
+  } catch (err) {
+    debug(`Gemini -> exception: ${(err as Error).name}: ${(err as Error).message}`);
     return FAILED;
   }
 }
@@ -90,14 +107,26 @@ async function tryGroq(prompt: string, apiKey: string): Promise<WaterfallResult>
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (res.status === 429) return { result: null, rateLimited: true };
-    if (!res.ok) return FAILED;
+    if (res.status === 429) {
+      debug(`Groq -> 429 rate limited`);
+      return { result: null, rateLimited: true };
+    }
+    if (!res.ok) {
+      debug(`Groq -> HTTP ${res.status} ${res.statusText}`);
+      return FAILED;
+    }
 
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     const text = data.choices?.[0]?.message?.content;
-    if (typeof text !== "string") return FAILED;
-    return { result: safeParseJson(text), rateLimited: false };
-  } catch {
+    if (typeof text !== "string") {
+      debug(`Groq -> no content in response: ${JSON.stringify(data).slice(0, 200)}`);
+      return FAILED;
+    }
+    const parsed = safeParseJson(text);
+    debug(`Groq -> ${parsed ? "success" : `failed to parse JSON from: ${text.slice(0, 150)}`}`);
+    return { result: parsed, rateLimited: false };
+  } catch (err) {
+    debug(`Groq -> exception: ${(err as Error).name}: ${(err as Error).message}`);
     return FAILED;
   }
 }
@@ -111,10 +140,16 @@ async function tryPollinations(prompt: string): Promise<WaterfallResult> {
       body: JSON.stringify({ messages: [{ role: "user", content: prompt }], model: "openai", jsonMode: true }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!res.ok) return FAILED;
+    if (!res.ok) {
+      debug(`Pollinations -> HTTP ${res.status} ${res.statusText}`);
+      return FAILED;
+    }
     const text = await res.text();
-    return { result: safeParseJson(text), rateLimited: false };
-  } catch {
+    const parsed = safeParseJson(text);
+    debug(`Pollinations -> ${parsed ? "success" : `failed to parse JSON from: ${text.slice(0, 150)}`}`);
+    return { result: parsed, rateLimited: false };
+  } catch (err) {
+    debug(`Pollinations -> exception: ${(err as Error).name}: ${(err as Error).message}`);
     return FAILED;
   }
 }
@@ -123,17 +158,22 @@ async function tryPollinations(prompt: string): Promise<WaterfallResult> {
 async function generateJson(prompt: string): Promise<Record<string, unknown> | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
+  debug(`starting waterfall — GEMINI_API_KEY ${geminiKey ? "present" : "MISSING"}, GROQ_API_KEY ${groqKey ? "present" : "MISSING"}`);
 
   for (let attempt = 0; attempt < WATERFALL_RETRIES; attempt++) {
     if (geminiKey) {
       const { result, rateLimited } = await tryGemini(prompt, geminiKey);
       if (result) return result;
       if (rateLimited) await sleep(4000); // matches GraphOne's brief Gemini free-tier backoff
+    } else {
+      debug(`skipping Gemini — no key`);
     }
 
     if (groqKey) {
       const { result } = await tryGroq(prompt, groqKey);
       if (result) return result;
+    } else {
+      debug(`skipping Groq — no key`);
     }
 
     const { result } = await tryPollinations(prompt);
@@ -142,14 +182,15 @@ async function generateJson(prompt: string): Promise<Record<string, unknown> | n
     if (attempt < WATERFALL_RETRIES - 1) await sleep(1500 * (attempt + 1));
   }
 
+  debug(`all tiers failed after ${WATERFALL_RETRIES} attempt(s)`);
   return null;
 }
 
 function buildSummaryPrompt(title: string, description: string): string {
-  return `You are summarizing an AI industry news article for a news aggregator. Write a concise, factual 2-3 sentence summary in your own words (do not just copy the input) that captures what happened and why it matters to someone following AI news. Do not start with phrases like "This article discusses" or "The author explains".
+  return `You are summarizing an AI industry news article for a news aggregator. Write a factual 4-5 sentence summary in your own words (do not just copy the input) based ONLY on the source text below — do not invent details, numbers, or claims that aren't in it. Capture what happened and why it matters to someone following AI news. Do not start with phrases like "This article discusses" or "The author explains", and do not repeat the title verbatim as a sentence.
 
 Title: ${title}
-Source description: ${description || "(no description provided)"}
+Source text: ${description}
 
 Respond with ONLY this JSON shape and nothing else: {"summary": "..."}`;
 }
