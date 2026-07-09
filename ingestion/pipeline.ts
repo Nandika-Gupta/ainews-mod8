@@ -101,6 +101,14 @@ async function uniqueSlug(base: string): Promise<string> {
   return `${slug}-${Date.now().toString(36).slice(-5)}`;
 }
 
+/**
+ * Domains that are never a valid news source regardless of which feed or
+ * discovery mechanism surfaced them — a video/social-post URL isn't a
+ * published article, even when Hacker News discovery (see hnDiscovery.ts)
+ * surfaces one as a "story" link.
+ */
+const BLOCKED_DOMAINS = new Set(["youtube.com"]);
+
 async function ingestEntry(
   entry: FeedEntry,
   source: FeedSource,
@@ -111,6 +119,7 @@ async function ingestEntry(
 
   const domain = domainFromUrl(articleUrl);
   if (!domain) return "invalid";
+  if (BLOCKED_DOMAINS.has(domain)) return "invalid";
 
   if (!source.aiOnly && !isAiRelevant(entry.title, entry.summary)) {
     return "not-relevant";
