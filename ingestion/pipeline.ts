@@ -251,10 +251,30 @@ async function enrichValidated(v: ValidatedEntry): Promise<PreparedEntry> {
  * description) still prefers the original summary separately, in
  * finalizePrepared.
  */
+// Hard wall-clock ceiling on the LLM-summarization phase, separate from and
+// in addition to llmSummarizer.ts's per-tier rate-limit gates. Those gates
+// correctly pace *how fast* any one provider gets hit, but say nothing about
+// *how long the whole run takes* — for a large batch (e.g. after a longer
+// gap between cron runs, or many articles cascading to the slower Groq/
+// Pollinations tiers) the serialized per-tier spacing can add up to more
+// than the GitHub Actions step timeout, which would kill the process before
+// it ever reaches pruneToMostRecent() — confirmed live: a real batch run
+// with the gates in place but no budget ran past 25 minutes without
+// finishing. Once this budget is spent, remaining articles skip the LLM
+// waterfall entirely and use their raw RSS/body-excerpt text as-is (still
+// real content, never the title, never a blocking call) — finalize() and
+// prune() are always reached regardless of batch size.
+const PIPELINE_STARTED_AT = Date.now();
+const SUMMARIZATION_BUDGET_MS = 7 * 60_000;
+
+function withinSummarizationBudget(): boolean {
+  return Date.now() - PIPELINE_STARTED_AT < SUMMARIZATION_BUDGET_MS;
+}
+
 async function summarizePrepared(p: PreparedEntry): Promise<string> {
   const realContent = (p.bodyExcerpt || p.summary || "").trim();
   const hasRealContent = realContent.length > 0 && realContent !== p.title.trim();
-  const llmSummary = hasRealContent ? await generateAiSummary(p.title, realContent) : null;
+  const llmSummary = hasRealContent && withinSummarizationBudget() ? await generateAiSummary(p.title, realContent) : null;
   return llmSummary || p.summary || p.bodyExcerpt || NO_SUMMARY_PLACEHOLDER;
 }
 

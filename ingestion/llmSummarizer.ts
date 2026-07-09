@@ -16,21 +16,82 @@
  *   timeout, up to 15s*(attempt+1) Gemini backoff) — appropriate for their
  *   slow, dedicated extraction batch, not for a pipeline that summarizes
  *   dozens of articles per ingest run and is already tuned for speed.
+ *
+ * Real free-tier limits this module paces against (verified where noted —
+ * see the per-tier IntervalGate constants below for the actual numbers and
+ * sources):
+ * - Gemini: exact RPM unconfirmed (Google no longer publishes a static
+ *   free-tier table; per-account and viewable only in an authenticated
+ *   AI Studio dashboard). Paced conservatively since we can't be sure.
+ * - Groq (llama-3.1-8b-instant): confirmed from Groq's own docs — 30 RPM,
+ *   14.4K RPD, 6K TPM, 500K TPD. TPM is the real constraint, not RPM: our
+ *   prompts run ~500-800 tokens each, so 6K TPM allows only ~7-9 req/min
+ *   sustained, well under the 30 RPM headline number.
+ * - Pollinations.ai: confirmed from their own API docs — anonymous/no-key
+ *   use is capped at 1 request per 15 seconds *per IP*, not unlimited as
+ *   originally assumed here. Since every article that reaches this tier in
+ *   a single ingest run shares one GitHub Actions runner's IP, concurrent
+ *   fallback calls were colliding and 429-ing each other — fixed via
+ *   pollinationsGate below.
  */
 
 const GEMINI_MODEL = "gemini-flash-lite-latest";
 const GROQ_MODEL = "llama-3.1-8b-instant";
 const REQUEST_TIMEOUT_MS = 20_000;
-// A single pass through all 3 tiers, not a repeated full waterfall. The
-// last tier (Pollinations) has no API key and no rate limit, so a second
-// full pass 1.5s later rarely changes the outcome for a genuine failure —
-// it mostly just doubles worst-case latency (up to another ~60s per
-// article across 3 tiers' timeouts) for articles that were going to fail
-// either way. Any article that still ends up with a weak/fallback summary
-// gets caught by the backfillSummaries.ts safety net, so lowering this is a
-// safe trade of a small amount of coverage for a real speed win at real
-// ingestion volume.
+// A single pass through all 3 tiers, not a repeated full waterfall. Any
+// article that still ends up with a weak/fallback summary just falls back
+// to its RSS description (see pipeline.ts) — retrying the full waterfall
+// again 1.5s later rarely changes the outcome for a genuine failure and
+// mostly just doubles worst-case latency, so a single pass is a safe trade
+// of a small amount of coverage for a real speed win at real ingestion
+// volume.
 const WATERFALL_RETRIES = 1;
+
+/**
+ * Serializes calls with a minimum spacing between them — a proper per-tier
+ * rate limiter, unlike the plain concurrency cap below (Semaphore), which
+ * only bounds how many calls are in flight at once and says nothing about
+ * how *frequently* a single provider gets hit. Acquisitions are chained
+ * through a promise queue so callers are served in order, each waiting out
+ * whatever's left of the minimum interval since the last acquisition.
+ */
+class IntervalGate {
+  private nextAvailableAt = 0;
+  private queue: Promise<void> = Promise.resolve();
+
+  constructor(private readonly minIntervalMs: number) {}
+
+  acquire(): Promise<void> {
+    const turn = this.queue.then(async () => {
+      const wait = this.nextAvailableAt - Date.now();
+      if (wait > 0) await sleep(wait);
+      this.nextAvailableAt = Date.now() + this.minIntervalMs;
+    });
+    // Swallow rejections in the chain itself so one failed wait doesn't
+    // wedge every caller queued behind it — callers still see their own
+    // turn's promise (which never rejects; sleep() can't throw).
+    this.queue = turn.catch(() => {});
+    return turn;
+  }
+}
+
+// ~13.3 req/min — deliberately conservative given the exact Gemini free-tier
+// RPM couldn't be confirmed (commonly-cited third-party figure is ~15 RPM,
+// unverified). Gemini is the first tier every article tries, so it's the
+// most exposed to a wrong guess here; erring conservative just means a few
+// more articles fall through to Groq, which is harmless.
+const GEMINI_MIN_INTERVAL_MS = 4500;
+// ~7.5 req/min — paced to the confirmed 6K TPM budget (the binding Groq
+// limit) assuming ~800 tokens/request worst case, not the higher 30 RPM
+// headline number.
+const GROQ_MIN_INTERVAL_MS = 8000;
+// Confirmed 1 req/15s per IP; +500ms margin for clock/network jitter so we
+// never land exactly on the boundary.
+const POLLINATIONS_MIN_INTERVAL_MS = 15_500;
+
+const geminiGate = new IntervalGate(GEMINI_MIN_INTERVAL_MS);
+const groqGate = new IntervalGate(GROQ_MIN_INTERVAL_MS);
+const pollinationsGate = new IntervalGate(POLLINATIONS_MIN_INTERVAL_MS);
 
 const DEBUG = !!process.env.LLM_SUMMARIZER_DEBUG;
 function debug(msg: string): void {
@@ -41,14 +102,13 @@ function debug(msg: string): void {
  * A GLOBAL concurrency gate across every call into this module, not just a
  * per-source one. pipeline.ts bounds LLM calls to 4-at-a-time *within* a
  * single source, but up to 4 sources also run concurrently — meaning up to
- * 4×4=16 LLM requests could fire at once with no cross-source coordination,
- * easily blowing through Gemini's free-tier rate limit all at once and
- * triggering a synchronized cascade of 429s/backoffs across sources rather
- * than a clean, staggered fallback (observed live: a burst of articles
- * created in the first ~2 minutes of a run, then a multi-minute stall).
- * Since every LLM call in the whole ingest process funnels through
- * generateJson() in this one module/process, a module-level semaphore here
- * is the simplest correct place to cap the TRUE global concurrency.
+ * 4×4=16 LLM requests could fire at once with no cross-source coordination.
+ * The per-tier IntervalGates above are what actually keep each provider's
+ * real-world rate limit from being violated; this cap is now a secondary
+ * backstop that just bounds how many articles are mid-summarization (and
+ * how many open HTTP connections/timers exist) at once, so a burst of new
+ * articles can't pile up an unbounded number of pending waterfall attempts
+ * all waiting on the same interval gates at once.
  */
 class Semaphore {
   private available: number;
@@ -83,10 +143,9 @@ const llmGate = new Semaphore(GLOBAL_LLM_CONCURRENCY);
 
 interface WaterfallResult {
   result: Record<string, unknown> | null;
-  rateLimited: boolean;
 }
 
-const FAILED: WaterfallResult = { result: null, rateLimited: false };
+const FAILED: WaterfallResult = { result: null };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -110,7 +169,7 @@ function safeParseJson(text: string): Record<string, unknown> | null {
   }
 }
 
-/** Tier 1: Gemini free tier. Returns (result, rateLimited) — a 429 signals the caller to back off before falling through. */
+/** Tier 1: Gemini free tier. */
 async function tryGemini(prompt: string, apiKey: string): Promise<WaterfallResult> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
   try {
@@ -125,7 +184,7 @@ async function tryGemini(prompt: string, apiKey: string): Promise<WaterfallResul
     });
     if (res.status === 429) {
       debug(`Gemini -> 429 rate limited`);
-      return { result: null, rateLimited: true };
+      return FAILED;
     }
     if (!res.ok) {
       debug(`Gemini -> HTTP ${res.status} ${res.statusText}`);
@@ -140,7 +199,7 @@ async function tryGemini(prompt: string, apiKey: string): Promise<WaterfallResul
     }
     const parsed = safeParseJson(text);
     debug(`Gemini -> ${parsed ? "success" : `failed to parse JSON from: ${text.slice(0, 150)}`}`);
-    return { result: parsed, rateLimited: false };
+    return { result: parsed };
   } catch (err) {
     debug(`Gemini -> exception: ${(err as Error).name}: ${(err as Error).message}`);
     return FAILED;
@@ -162,7 +221,7 @@ async function tryGroq(prompt: string, apiKey: string): Promise<WaterfallResult>
     });
     if (res.status === 429) {
       debug(`Groq -> 429 rate limited`);
-      return { result: null, rateLimited: true };
+      return FAILED;
     }
     if (!res.ok) {
       debug(`Groq -> HTTP ${res.status} ${res.statusText}`);
@@ -177,7 +236,7 @@ async function tryGroq(prompt: string, apiKey: string): Promise<WaterfallResult>
     }
     const parsed = safeParseJson(text);
     debug(`Groq -> ${parsed ? "success" : `failed to parse JSON from: ${text.slice(0, 150)}`}`);
-    return { result: parsed, rateLimited: false };
+    return { result: parsed };
   } catch (err) {
     debug(`Groq -> exception: ${(err as Error).name}: ${(err as Error).message}`);
     return FAILED;
@@ -200,7 +259,7 @@ async function tryPollinations(prompt: string): Promise<WaterfallResult> {
     const text = await res.text();
     const parsed = safeParseJson(text);
     debug(`Pollinations -> ${parsed ? "success" : `failed to parse JSON from: ${text.slice(0, 150)}`}`);
-    return { result: parsed, rateLimited: false };
+    return { result: parsed };
   } catch (err) {
     debug(`Pollinations -> exception: ${(err as Error).name}: ${(err as Error).message}`);
     return FAILED;
@@ -215,20 +274,26 @@ async function generateJsonGated(prompt: string): Promise<Record<string, unknown
 
   for (let attempt = 0; attempt < WATERFALL_RETRIES; attempt++) {
     if (geminiKey) {
-      const { result, rateLimited } = await tryGemini(prompt, geminiKey);
+      await geminiGate.acquire();
+      const { result } = await tryGemini(prompt, geminiKey);
       if (result) return result;
-      if (rateLimited) await sleep(4000); // matches GraphOne's brief Gemini free-tier backoff
+      // No extra ad-hoc backoff on a 429 here — geminiGate already enforces
+      // real spacing between every Gemini call globally (including the
+      // very next article's attempt), which supersedes a local per-call
+      // sleep.
     } else {
       debug(`skipping Gemini — no key`);
     }
 
     if (groqKey) {
+      await groqGate.acquire();
       const { result } = await tryGroq(prompt, groqKey);
       if (result) return result;
     } else {
       debug(`skipping Groq — no key`);
     }
 
+    await pollinationsGate.acquire();
     const { result } = await tryPollinations(prompt);
     if (result) return result;
 

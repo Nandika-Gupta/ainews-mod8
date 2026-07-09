@@ -2,11 +2,12 @@ name: Ingest AI news
 
 on:
   schedule:
-    # Every 6 hours (matches GraphOne's cron_scheduler.py: schedule.every(6).hours,
-    # "boss wants it to run 3-4 times in 24 hours"). GitHub's scheduler is
+    # Every 8 hours (3x/day: 00:00, 08:00, 16:00 UTC) — lower frequency to
+    # keep GitHub Actions minutes usage comfortable if this repo is ever
+    # moved to a private repo on a lower-tier plan. GitHub's scheduler is
     # best-effort and can lag during high load — treat this as "roughly every
-    # 6 hours," not a guarantee.
-    - cron: "0 */6 * * *"
+    # 8 hours," not a guarantee.
+    - cron: "0 */8 * * *"
   workflow_dispatch: {}
 
 jobs:

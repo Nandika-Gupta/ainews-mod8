@@ -55,9 +55,13 @@ async function main() {
     for (const err of r.errors.slice(0, 3)) console.log(`   ! ${err}`);
   }
 
+  // Always logged, even when 0 — this line's presence in the run log is
+  // the confirmation that prune actually executed (as opposed to the
+  // process having been killed or thrown before reaching this line).
   const pruned = await pruneToMostRecent(MAX_LIVE_ARTICLES);
+  console.log(`Prune check ran: removed ${pruned} article(s) beyond the ${MAX_LIVE_ARTICLES}-article cap.`);
 
-  console.log(`\nDone. ${totalCreated} new article(s) ingested.${pruned ? ` Pruned ${pruned} older article(s) to stay at ${MAX_LIVE_ARTICLES}.` : ""}`);
+  console.log(`\nDone. ${totalCreated} new article(s) ingested.`);
 }
 
 main()
