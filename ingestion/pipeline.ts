@@ -27,6 +27,14 @@ import type { FeedSource } from "./sources";
  * technique GraphOne's tests demonstrated for schema.org/Product, retargeted
  * at NewsArticle.
  */
+const THIN_SUMMARY_WORD_THRESHOLD = 40;
+
+/** True for an empty description, or one too short to support a genuine multi-sentence LLM summary. */
+function isThinSummary(summary: string): boolean {
+  const words = summary.trim().split(/\s+/).filter(Boolean);
+  return words.length < THIN_SUMMARY_WORD_THRESHOLD;
+}
+
 async function enrichFromArticlePage(articleUrl: string): Promise<{ publishedAt: Date | null; description: string | null; bodyExcerpt: string | null }> {
   try {
     const res = await fetch(articleUrl, { signal: AbortSignal.timeout(10_000) });
@@ -110,6 +118,16 @@ async function uniqueSlug(base: string): Promise<string> {
  */
 const BLOCKED_DOMAINS = new Set(["youtube.com"]);
 
+interface ValidatedEntry {
+  entry: FeedEntry;
+  articleUrl: string;
+  domain: string;
+  title: string;
+  summaryRaw: string;
+  publishedAtRaw: Date | null;
+  nameHint: string | null;
+}
+
 interface PreparedEntry {
   entry: FeedEntry;
   articleUrl: string;
@@ -121,17 +139,17 @@ interface PreparedEntry {
   nameHint: string | null;
 }
 
-type PrepareOutcome = { kind: "prepared"; data: PreparedEntry } | { kind: "duplicate" | "near-duplicate" | "not-relevant" | "invalid" };
+type ValidateOutcome = { kind: "validated"; data: ValidatedEntry } | { kind: "duplicate" | "near-duplicate" | "not-relevant" | "invalid" };
 
 /**
- * Fast, sequential-safe checks + real-content gathering — validation,
- * exact-URL/near-duplicate-title dedup, and enrichment, but no LLM call and
- * no DB write. Must stay sequential (entry N's checks complete before entry
- * N+1's) so two entries can't race on the near-duplicate-title index; the
- * slow LLM step is deliberately NOT here — see summarizePrepared() below,
- * which is safe to run concurrently since it touches no shared/DB state.
+ * Fast, sequential-safe checks only — validation and exact-URL/near-
+ * duplicate-title dedup. Must stay sequential (entry N's checks complete
+ * before entry N+1's) so two entries can't race on the near-duplicate-title
+ * index. Deliberately does NOT fetch the article page — that's the slow
+ * part (see enrichValidated() below), safe to run concurrently since it
+ * touches no shared/DB state, unlike these checks.
  */
-async function prepareEntry(entry: FeedEntry, source: FeedSource, titleIndex: RecentTitleIndex, seenInBatch: Set<string>): Promise<PrepareOutcome> {
+async function validateEntry(entry: FeedEntry, source: FeedSource, titleIndex: RecentTitleIndex, seenInBatch: Set<string>): Promise<ValidateOutcome> {
   const articleUrl = normalizeUrl(entry.link);
   if (!articleUrl) return { kind: "invalid" };
   if (seenInBatch.has(articleUrl)) return { kind: "duplicate" };
@@ -150,16 +168,6 @@ async function prepareEntry(entry: FeedEntry, source: FeedSource, titleIndex: Re
   const title = cleanText(entry.title);
   if (isNearDuplicateTitle(titleIndex, title)) return { kind: "near-duplicate" };
 
-  let publishedAt = robustParseDate(entry.publishedRaw);
-  let summary = entry.summary;
-  let bodyExcerpt: string | null = null;
-  if (!publishedAt || !summary) {
-    const enriched = await enrichFromArticlePage(articleUrl);
-    publishedAt = publishedAt ?? enriched.publishedAt ?? new Date();
-    if (!summary && enriched.description) summary = enriched.description;
-    bodyExcerpt = enriched.bodyExcerpt;
-  }
-
   // "discovery" sources (e.g. Hacker News — see hnDiscovery.ts) link to
   // arbitrary other sites, so their own `name` describes the discovery
   // mechanism, not the linked publisher — never use it as a name hint. Real
@@ -171,8 +179,45 @@ async function prepareEntry(entry: FeedEntry, source: FeedSource, titleIndex: Re
   recordTitle(titleIndex, title);
 
   return {
-    kind: "prepared",
-    data: { entry, articleUrl, domain, title, summary, bodyExcerpt, publishedAt: publishedAt ?? new Date(), nameHint },
+    kind: "validated",
+    data: { entry, articleUrl, domain, title, summaryRaw: entry.summary, publishedAtRaw: robustParseDate(entry.publishedRaw), nameHint },
+  };
+}
+
+/**
+ * The other slow part (alongside the LLM call) — fetching the article page
+ * for real content. Run concurrently across many validated entries (see
+ * ENRICH_CONCURRENCY below); safe because, unlike validateEntry(), this
+ * touches no shared/DB state — it only reads network responses and returns
+ * data, nothing here can race with another entry's enrichment.
+ */
+async function enrichValidated(v: ValidatedEntry): Promise<PreparedEntry> {
+  let publishedAt = v.publishedAtRaw;
+  let summary = v.summaryRaw;
+  let bodyExcerpt: string | null = null;
+  // Trigger real-content enrichment not just when the description is
+  // missing, but when it's too thin to support a genuine 4-5 sentence
+  // summary (e.g. a single-clause RSS blurb) — otherwise the LLM has
+  // nothing to work with beyond a sentence fragment and, correctly
+  // instructed not to invent facts, produces an accurate but too-short
+  // summary. A word-count threshold is a cheap, good-enough proxy for
+  // "is there enough real material here."
+  if (!publishedAt || isThinSummary(summary)) {
+    const enriched = await enrichFromArticlePage(v.articleUrl);
+    publishedAt = publishedAt ?? enriched.publishedAt ?? new Date();
+    if (!summary && enriched.description) summary = enriched.description;
+    bodyExcerpt = enriched.bodyExcerpt;
+  }
+
+  return {
+    entry: v.entry,
+    articleUrl: v.articleUrl,
+    domain: v.domain,
+    title: v.title,
+    summary,
+    bodyExcerpt,
+    publishedAt: publishedAt ?? new Date(),
+    nameHint: v.nameHint,
   };
 }
 
@@ -185,9 +230,17 @@ async function prepareEntry(entry: FeedEntry, source: FeedSource, titleIndex: Re
  * plausible-sounding but unverified details (confirmed live), so the LLM is
  * only called when there's real source text that isn't just the headline
  * again.
+ *
+ * The LLM's *source material* prefers bodyExcerpt over summary whenever both
+ * are present: bodyExcerpt is only ever fetched when the RSS/OG summary was
+ * thin (see isThinSummary in prepareEntry), so if it exists it's there
+ * specifically because it's the richer source — using the thin summary
+ * instead would defeat the point of fetching it. dek (the short display
+ * description) still prefers the original summary separately, in
+ * finalizePrepared.
  */
 async function summarizePrepared(p: PreparedEntry): Promise<string> {
-  const realContent = (p.summary || p.bodyExcerpt || "").trim();
+  const realContent = (p.bodyExcerpt || p.summary || "").trim();
   const hasRealContent = realContent.length > 0 && realContent !== p.title.trim();
   const llmSummary = hasRealContent ? await generateAiSummary(p.title, realContent) : null;
   return llmSummary || p.summary || p.bodyExcerpt || "No summary available for this article.";
@@ -231,26 +284,29 @@ function newPipelineResult(source: string): PipelineResult {
   };
 }
 
+const ENRICH_CONCURRENCY = 5;
 const SUMMARY_CONCURRENCY = 4;
 
 /**
- * Three phases per source: (1) sequential validation/dedup/enrichment — the
- * only phase that must stay serial, so concurrent entries can't race on the
- * near-duplicate-title index; (2) concurrent LLM summarization — the slow
- * part (sequential retries/backoffs across 200+ articles were the direct
- * cause of a 19+ minute GitHub Actions run), safe to parallelize since it
- * touches no shared state; (3) sequential DB writes, original order.
+ * Four phases per source: (1) sequential validation/dedup — the only phase
+ * that must stay serial, so concurrent entries can't race on the
+ * near-duplicate-title index; (2) concurrent article-page enrichment (fetch
+ * real content for thin/missing descriptions); (3) concurrent LLM
+ * summarization — both (2) and (3) are the slow parts (sequential retries
+ * and fetches across 200+ articles were the direct cause of a 19+ minute
+ * GitHub Actions run), safe to parallelize since neither touches shared
+ * state; (4) sequential DB writes, original order.
  */
 async function ingestEntries(entries: FeedEntry[], source: FeedSource, titleIndex: RecentTitleIndex): Promise<PipelineResult> {
   const result = newPipelineResult(source.name);
   result.fetched = entries.length;
   const seenInBatch = new Set<string>();
 
-  const prepared: PreparedEntry[] = [];
+  const validated: ValidatedEntry[] = [];
   for (const entry of entries) {
     try {
-      const outcome = await prepareEntry(entry, source, titleIndex, seenInBatch);
-      if (outcome.kind === "prepared") prepared.push(outcome.data);
+      const outcome = await validateEntry(entry, source, titleIndex, seenInBatch);
+      if (outcome.kind === "validated") validated.push(outcome.data);
       else if (outcome.kind === "duplicate") result.skippedDuplicate++;
       else if (outcome.kind === "near-duplicate") result.skippedNearDuplicate++;
       else if (outcome.kind === "not-relevant") result.skippedNotAiRelevant++;
@@ -259,6 +315,15 @@ async function ingestEntries(entries: FeedEntry[], source: FeedSource, titleInde
       result.errors.push(`"${entry.title}": ${(err as Error).message}`);
     }
   }
+
+  const prepared = await mapWithConcurrency(validated, ENRICH_CONCURRENCY, async (v) => {
+    try {
+      return await enrichValidated(v);
+    } catch (err) {
+      result.errors.push(`"${v.title}" (enrichment): ${(err as Error).message}`);
+      return { entry: v.entry, articleUrl: v.articleUrl, domain: v.domain, title: v.title, summary: v.summaryRaw, bodyExcerpt: null, publishedAt: v.publishedAtRaw ?? new Date(), nameHint: v.nameHint };
+    }
+  });
 
   const summaries = await mapWithConcurrency(prepared, SUMMARY_CONCURRENCY, async (p) => {
     try {
