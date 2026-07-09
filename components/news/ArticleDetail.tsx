@@ -82,7 +82,7 @@ export function ArticleDetail({ article: a, related, sources, popularSources }: 
                 textDecoration: "none",
               }}
             >
-              <PublisherIcon source={source} box={22} />
+              <PublisherIcon key={source.domain} source={source} box={22} />
               <span style={{ font: "var(--fw-semibold) 13px/1 var(--font-sans)", color: "var(--text-primary)" }}>{source.name}</span>
             </a>
             <span style={{ color: "var(--text-quaternary)" }}>·</span>

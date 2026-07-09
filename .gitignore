@@ -45,3 +45,4 @@ next-env.d.ts
 
 # reference-only material, not part of the shippable app
 /atlas-intelligence
+/reference

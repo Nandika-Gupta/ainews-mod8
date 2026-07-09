@@ -52,7 +52,12 @@ export function PublisherIcon({ source, box = 44 }: PublisherIconProps) {
   }, [index, source.domain, source.logoUrl]);
 
   const radius = box <= 18 ? "var(--radius-xs)" : box >= 40 ? "var(--radius-md)" : "var(--radius-sm)";
-  const imgSize = Math.round(box * 0.56);
+  // Flat neutral chrome + a near-full-bleed image (real brand marks read as
+  // crisp and self-contained, closer to how a plain favicon renders in a
+  // browser tab) instead of a per-publisher color-tinted halo + border ring,
+  // which read as an extra decorative "badge" competing with the logo's own
+  // colors rather than a clean container for it.
+  const imgSize = Math.round(box * 0.72);
   const c = source.color;
   const src = candidates[index];
 
@@ -67,8 +72,8 @@ export function PublisherIcon({ source, box = 44 }: PublisherIconProps) {
         height: box,
         flex: "none",
         borderRadius: radius,
-        background: `color-mix(in srgb, ${c} 16%, var(--bg-surface-2))`,
-        border: `1px solid color-mix(in srgb, ${c} 38%, transparent)`,
+        background: "var(--bg-surface-2)",
+        border: "1px solid var(--border-default)",
         boxShadow: box >= 40 ? "var(--highlight-top)" : "none",
         overflow: "hidden",
       }}
