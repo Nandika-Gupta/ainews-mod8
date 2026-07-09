@@ -49,9 +49,15 @@ export function FilterDropdown({ title, options, selected, onToggle, onClear, on
   }, []);
 
   // Two-pass positioning: mount off-screen (hidden) first so the panel's
-  // real height (which depends on option count) can be measured, then flip
-  // above the anchor if there isn't room below, and clamp horizontally so it
-  // never renders off-screen either.
+  // real height (which depends on option count) can be measured, then clamp
+  // horizontally so it never renders off-screen. Always opens downward from
+  // the anchor — an earlier version flipped the panel above the anchor when
+  // there wasn't room below, but on a short viewport (anchor near the
+  // bottom of visible content, plenty of page below it once scrolled) that
+  // made the panel jump up and cover the hero/search bar instead, which
+  // read as broken rather than intentional. A fixed minimum height with its
+  // own internal scroll (see the options list below) is used instead so the
+  // panel always stays usable even when space below is tight.
   useLayoutEffect(() => {
     function updatePosition() {
       const anchor = anchorRef.current;
@@ -61,11 +67,8 @@ export function FilterDropdown({ title, options, selected, onToggle, onClear, on
       const panelHeight = panel?.getBoundingClientRect().height ?? 340;
 
       const spaceBelow = window.innerHeight - anchorRect.bottom - VIEWPORT_MARGIN;
-      const spaceAbove = anchorRect.top - VIEWPORT_MARGIN;
-      const openUpward = spaceBelow < panelHeight && spaceAbove > spaceBelow;
-
-      const top = openUpward ? Math.max(VIEWPORT_MARGIN, anchorRect.top - panelHeight - 8) : anchorRect.bottom + 8;
-      const maxHeight = openUpward ? Math.min(panelHeight, spaceAbove) : Math.min(panelHeight, spaceBelow);
+      const top = anchorRect.bottom + 8;
+      const maxHeight = Math.min(panelHeight, Math.max(200, spaceBelow));
 
       let left = align === "right" ? anchorRect.right - PANEL_WIDTH : anchorRect.left;
       left = Math.max(VIEWPORT_MARGIN, Math.min(left, window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN));
