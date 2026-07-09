@@ -24,9 +24,13 @@
  *   free-tier table; per-account and viewable only in an authenticated
  *   AI Studio dashboard). Paced conservatively since we can't be sure.
  * - Groq (llama-3.1-8b-instant): confirmed from Groq's own docs — 30 RPM,
- *   14.4K RPD, 6K TPM, 500K TPD. TPM is the real constraint, not RPM: our
- *   prompts run ~500-800 tokens each, so 6K TPM allows only ~7-9 req/min
- *   sustained, well under the 30 RPM headline number.
+ *   14.4K RPD, 6K TPM, 500K TPD. TPM is the real constraint, not RPM. This
+ *   is enforced, not assumed: MAX_PROMPT_TITLE_CHARS/MAX_PROMPT_SOURCE_CHARS
+ *   (see buildSummaryPrompt) hard-cap prompt size regardless of how long an
+ *   upstream RSS description or page meta description happens to be, and
+ *   MAX_COMPLETION_TOKENS hard-caps the response — worst case ~710
+ *   tokens/request, comfortably under the 800-token budget groqGate's
+ *   7.5 req/min pacing assumes (~5,325 TPM worst case vs the 6K limit).
  * - Pollinations.ai: confirmed from their own API docs — anonymous/no-key
  *   use is capped at 1 request per 15 seconds *per IP*, not unlimited as
  *   originally assumed here. Since every article that reaches this tier in
@@ -178,7 +182,7 @@ async function tryGemini(prompt: string, apiKey: string): Promise<WaterfallResul
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+        generationConfig: { temperature: 0.1, responseMimeType: "application/json", maxOutputTokens: MAX_COMPLETION_TOKENS },
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -216,6 +220,7 @@ async function tryGroq(prompt: string, apiKey: string): Promise<WaterfallResult>
         model: GROQ_MODEL,
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
+        max_tokens: MAX_COMPLETION_TOKENS,
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -320,11 +325,37 @@ async function generateJson(prompt: string): Promise<Record<string, unknown> | n
   }
 }
 
+// Every upstream source that can feed `description` into this prompt is
+// *supposed* to already be length-bounded (feedParser.ts slices RSS
+// summaries to 500 chars, metadataExtractor.ts's bodyExcerpt caps at 600),
+// except one: pipeline.ts's enrichValidated() also falls back to a page's
+// raw OG/JSON-LD meta description with no cap of its own — by convention
+// those are short (~150-300 chars), but that's a web-author convention, not
+// something this codebase enforces. The Groq TPM pacing above assumes a
+// bounded worst-case prompt size, so truncating here — the one true
+// chokepoint every source funnels through — is what actually makes that
+// assumption hold, rather than relying on every current and future source
+// to independently remember to cap itself.
+const MAX_PROMPT_TITLE_CHARS = 200;
+const MAX_PROMPT_SOURCE_CHARS = 600;
+// Caps completion size on both Gemini and Groq (see maxOutputTokens/
+// max_tokens above) — without this, Groq's TPM budget (which counts
+// prompt + completion together) has no hard ceiling on the completion side,
+// even though a "4-5 sentence summary" instruction keeps it short in
+// practice. 250 tokens is still generous headroom over a typical 100-180
+// token summary, while keeping worst-case request size (prompt ~460 tokens
+// + completion 250 = ~710) comfortably under groqGate's 7.5 req/min * 800
+// token/request pacing budget — ~5,325 TPM worst case against a 6,000 TPM
+// limit, ~11% margin.
+const MAX_COMPLETION_TOKENS = 250;
+
 function buildSummaryPrompt(title: string, description: string): string {
+  const boundedTitle = title.slice(0, MAX_PROMPT_TITLE_CHARS);
+  const boundedDescription = description.slice(0, MAX_PROMPT_SOURCE_CHARS);
   return `You are summarizing an AI industry news article for a news aggregator. Write a factual 4-5 sentence summary in your own words (do not just copy the input) based ONLY on the source text below — do not invent details, numbers, or claims that aren't in it. Capture what happened and why it matters to someone following AI news. Do not start with phrases like "This article discusses" or "The author explains", and do not repeat the title verbatim as a sentence.
 
-Title: ${title}
-Source text: ${description}
+Title: ${boundedTitle}
+Source text: ${boundedDescription}
 
 Respond with ONLY this JSON shape and nothing else: {"summary": "..."}`;
 }
