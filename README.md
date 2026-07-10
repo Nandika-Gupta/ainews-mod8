@@ -1,4 +1,4 @@
-# Module 8 — AI News
+# Module 8 - AI News
 
 A news discovery module for AI news — a searchable, filterable, sortable listing table plus an article detail page with an AI-generated summary, comments, and a Popular Sources / Related News sidebar. Dark UI with a purple accent, real publisher logos. Runs on a real Postgres database via Prisma, with a REST API and a standalone RSS ingestion pipeline behind it — nothing on the page is mock data.
 
