@@ -1,0 +1,14 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="68.9 38.3 262 192"
+  fill="none"
+>
+  <title>Hermes Favicon</title>
+  <path
+    d="M 200,150 C 200,85, 100,85, 100,150 S 200,215, 200,150 S 300,85, 300,150 S 200,215, 200,150 M 300,150 V 70"
+    stroke="#FFFFFF"
+    stroke-width="50"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
